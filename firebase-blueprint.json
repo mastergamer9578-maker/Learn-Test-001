@@ -1,0 +1,49 @@
+{
+  "entities": {
+    "MenuItem": {
+      "title": "MenuItem",
+      "description": "Fast food menu item details",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "category": { "type": "string", "enum": ["BURGERS", "PIZZAS", "FAST FOOD", "DEALS"] },
+        "price": { "type": "number" },
+        "description": { "type": "string" },
+        "image": { "type": "string" },
+        "tag": { "type": "string" },
+        "isAvailable": { "type": "boolean" }
+      },
+      "required": ["id", "name", "category", "price", "description", "image", "isAvailable"]
+    },
+    "CustomerOrder": {
+      "title": "CustomerOrder",
+      "description": "Customer order details for kitchen processing",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "customerName": { "type": "string" },
+        "customerPhone": { "type": "string" },
+        "customerAddress": { "type": "string" },
+        "items": { "type": "array" },
+        "subtotal": { "type": "number" },
+        "deliveryFee": { "type": "number" },
+        "total": { "type": "number" },
+        "status": { "type": "string", "enum": ["PENDING", "PREPARING", "READY", "COMPLETED", "CANCELLED"] },
+        "createdAt": { "type": "string" },
+        "notes": { "type": "string" }
+      },
+      "required": ["id", "customerName", "customerPhone", "customerAddress", "items", "subtotal", "deliveryFee", "total", "status", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/products/{productId}": {
+      "schema": "MenuItem",
+      "description": "Collection of menu items for Shan Fast Food"
+    },
+    "/orders/{orderId}": {
+      "schema": "CustomerOrder",
+      "description": "Collection of live incoming and completed customer orders"
+    }
+  }
+}
