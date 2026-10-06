@@ -184,9 +184,6 @@ export const MenuSection: React.FC<MenuSectionProps> = ({
               }}
             />
           </div>
-          <span className="text-[9px] font-mono-code text-[#2B1810]/40 uppercase tracking-widest mt-1">
-            Swipe categories
-          </span>
         </div>
       </div>
 

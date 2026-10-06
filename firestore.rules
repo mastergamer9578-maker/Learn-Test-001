@@ -12,6 +12,11 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // Categories: Public menu navigation and categories management
+    match /categories/{categoryId} {
+      allow read, write: if true;
+    }
+
     // Orders: Anyone can create orders; live kitchen queue sync
     match /orders/{orderId} {
       allow read, write: if true;

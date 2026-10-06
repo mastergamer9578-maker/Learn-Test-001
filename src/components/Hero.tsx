@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowRight, Clock, Flame } from 'lucide-react';
+import { ArrowRight, Flame } from 'lucide-react';
 import { FALLBACK_HERO_IMAGE } from '../data/initialMenu';
 
 interface HeroProps {
@@ -30,7 +30,6 @@ export const Hero: React.FC<HeroProps> = ({
             
             {/* Location & Establishment Badge */}
             <div className="flex items-center gap-2 text-xs font-mono-code font-bold tracking-[0.2em] text-[#C46726] uppercase mb-4">
-              <span className="w-2 h-2 rounded-full bg-[#C46726] inline-block animate-pulse"></span>
               <span>KORANGI, KARACHI • EST. 2019</span>
             </div>
 
@@ -50,7 +49,7 @@ export const Hero: React.FC<HeroProps> = ({
               Cray cravings, locked down. From crispy fried chicken to fire-baked pizzas, we make comfort food worth coming back for.
             </p>
 
-            {/* CTA & Delivery Estimate */}
+            {/* CTA */}
             <div className="flex flex-wrap items-center gap-5 sm:gap-6">
               <button
                 onClick={onOrderOnline}
@@ -59,11 +58,6 @@ export const Hero: React.FC<HeroProps> = ({
                 <span>ORDER ONLINE</span>
                 <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
               </button>
-
-              <div className="flex items-center gap-2 text-xs font-mono-code text-[#2B1810]/75">
-                <Clock className="w-4 h-4 text-[#C46726]" />
-                <span>25-35 min delivery</span>
-              </div>
             </div>
 
           </div>

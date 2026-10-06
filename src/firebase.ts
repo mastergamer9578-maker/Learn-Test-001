@@ -1,6 +1,6 @@
 // Import the functions you need from the SDKs you need
 import { initializeApp, getApps, getApp } from "firebase/app";
-import { initializeFirestore, getFirestore } from "firebase/firestore";
+import { initializeFirestore, getFirestore, setLogLevel } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 
 // Web app's Firebase configuration
@@ -16,11 +16,16 @@ export const firebaseConfig = {
 // Initialize Firebase
 export const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
-// Initialize Firestore with auto-detect long polling to prevent connection dropouts in browser environments
+// Suppress non-fatal network reconnect/offline warning spam in preview environments
+try {
+  setLogLevel('error');
+} catch {}
+
+// Initialize Firestore with forced long polling for robust connectivity in web sandbox and iframe environments
 let firestoreDb;
 try {
   firestoreDb = initializeFirestore(app, {
-    experimentalAutoDetectLongPolling: true,
+    experimentalForceLongPolling: true,
   });
 } catch (e) {
   firestoreDb = getFirestore(app);

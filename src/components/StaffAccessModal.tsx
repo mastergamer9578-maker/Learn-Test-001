@@ -78,7 +78,7 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
       // 0. Enforce verified email check before checking roles
       if (!firebaseUser.emailVerified) {
         await signOut(auth);
-        setError('Please verify your email address before accessing the dashboard. Check your inbox for the verification link.');
+        setError('Email not verified! Please check your inbox and verify your email before accessing the dashboard.');
         return;
       }
 
@@ -259,12 +259,11 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
             console.warn('[StaffAccess] Notice dispatching verification email:', sendErr);
           }
 
-          // Trigger email verification guard screen
-          setUnverifiedUser(user);
-          setUnverifiedEmail(user.email || cleanId);
-          setError(
-            `Email verification required. We have sent a verification link to ${user.email || cleanId}. Please check your inbox and verify your email address to unlock the admin dashboard.`
-          );
+          // Immediately sign out unverified user and show the required message
+          await signOut(auth);
+          setUnverifiedUser(null);
+          setUnverifiedEmail('');
+          setError('Email not verified! Please check your inbox and verify your email before accessing the dashboard.');
           setIsLoading(false);
           return;
         }

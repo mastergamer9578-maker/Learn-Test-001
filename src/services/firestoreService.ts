@@ -13,45 +13,12 @@ import { MenuItem, CustomerOrder, StoreStatus } from '../types';
 import { INITIAL_HERO_IMAGE } from '../data/initialMenu';
 
 const PRODUCTS_COLLECTION = 'products';
+const CATEGORIES_COLLECTION = 'categories';
 const ORDERS_COLLECTION = 'orders';
 const SETTINGS_COLLECTION = 'settings';
 const STORE_SETTINGS_DOC = 'store';
 
-export const INITIAL_ORDERS: CustomerOrder[] = [
-  {
-    id: '#SHAN-1001',
-    customerName: 'Hamza Khan',
-    customerPhone: '0300 1234567',
-    customerAddress: 'House 45, Sector 31-D, Korangi, Karachi',
-    items: [
-      { id: 'shan-item-1', name: 'CRISPY ZINGER BURGER', price: 599, quantity: 2 },
-      { id: 'shan-item-5', name: 'KORANGI LOADED FRIES', price: 449, quantity: 1 },
-      { id: 'shan-item-7', name: 'CHILLED SOFT DRINK / MINT LEMONADE', price: 150, quantity: 2 },
-    ],
-    subtotal: 1947,
-    deliveryFee: 150,
-    total: 2097,
-    status: 'PREPARING',
-    createdAt: '12:30 PM',
-    notes: 'Extra spicy sauce on zinger please.',
-  },
-  {
-    id: '#SHAN-1002',
-    customerName: 'Fatima Bilal',
-    customerPhone: '0321 9876543',
-    customerAddress: 'Apartment 3B, Korangi Creek Road, Karachi',
-    items: [
-      { id: 'shan-item-3', name: 'CHICKEN TIKKA PIZZA', price: 1199, quantity: 1 },
-      { id: 'shan-item-6', name: 'CRISPY CHICKEN STRIPS (5 PCS)', price: 499, quantity: 1 },
-    ],
-    subtotal: 1698,
-    deliveryFee: 150,
-    total: 1848,
-    status: 'PENDING',
-    createdAt: '12:42 PM',
-    notes: 'Please ring bell upon arrival.',
-  },
-];
+export const INITIAL_ORDERS: CustomerOrder[] = [];
 
 /**
  * Utility to strip any `undefined` values recursively so Firestore never rejects payloads
@@ -165,6 +132,68 @@ export const subscribeToMenuItems = (
     onUpdate([]);
     if (onError && err instanceof Error) onError(err);
     return () => {};
+  }
+};
+
+/**
+ * Real-time subscription to the Firestore 'categories' collection using onSnapshot.
+ */
+export const subscribeToCategories = (
+  onUpdate: (categories: string[]) => void,
+  onError?: (error: Error) => void
+): (() => void) => {
+  try {
+    const categoriesRef = collection(db, CATEGORIES_COLLECTION);
+
+    const unsubscribe = onSnapshot(
+      categoriesRef,
+      (snapshot) => {
+        if (snapshot.empty) {
+          onUpdate([]);
+          return;
+        }
+
+        const list: string[] = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data();
+          const name = data.name || docSnap.id;
+          if (name) {
+            list.push(String(name).trim().toUpperCase());
+          }
+        });
+
+        onUpdate(Array.from(new Set(list.filter(Boolean))));
+      },
+      (error) => {
+        console.warn('[Firestore] Categories subscription notice:', error.message);
+        if (onError) onError(error);
+      }
+    );
+
+    return unsubscribe;
+  } catch (err: any) {
+    console.warn('[Firestore] Error setting up categories subscription:', err);
+    if (onError && err instanceof Error) onError(err);
+    return () => {};
+  }
+};
+
+/**
+ * Save updated categories list to Firestore 'categories' collection
+ */
+export const saveCategories = async (categoriesList: string[]): Promise<void> => {
+  try {
+    const cleaned = Array.from(new Set(categoriesList.map((c) => c.trim().toUpperCase()).filter(Boolean)));
+    for (const catName of cleaned) {
+      const docRef = doc(db, CATEGORIES_COLLECTION, catName);
+      await setDoc(docRef, { name: catName, updatedAtTimestamp: Date.now() }, { merge: true });
+    }
+  } catch (err: any) {
+    if (isPermissionDenied(err)) {
+      console.warn('[Firestore] Notice: Categories saved locally.');
+      return;
+    }
+    console.warn('[Firestore] Error saving categories to Firestore:', err);
   }
 };
 

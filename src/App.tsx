@@ -20,6 +20,8 @@ import {
   editMenuItem,
   toggleMenuItemAvailability,
   deleteMenuItem,
+  subscribeToCategories,
+  saveCategories,
   subscribeToOrders,
   createCustomerOrder,
   updateOrderStatus,
@@ -58,25 +60,23 @@ export default function App() {
   const [isStoryModalOpen, setIsStoryModalOpen] = useState(false);
   const [isContactModalOpen, setIsContactModalOpen] = useState(false);
 
-  // Menu Items State (Instant local cache / fallback + live background Firestore sync)
+  // Menu Items State (Real-time Firestore sync with instant state caching)
   const [menuItems, setMenuItems] = useState<MenuItem[]>(() => {
     try {
       const cached = localStorage.getItem('shan_cached_menu_items');
       if (cached) {
         const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed) && parsed.length > 0) {
+        if (Array.isArray(parsed)) {
           return parsed;
         }
       }
     } catch (e) {
       console.warn('[Cache] Error loading cached menu items:', e);
     }
-    // Instant fallback so storefront loads in 0ms without blocking on network
-    return INITIAL_MENU_ITEMS;
+    return [];
   });
 
   const [isLoadingMenu, setIsLoadingMenu] = useState<boolean>(() => {
-    // If we have cached or initial fallback items, do not show blocking spinner
     try {
       const cached = localStorage.getItem('shan_cached_menu_items');
       if (cached) {
@@ -84,7 +84,7 @@ export default function App() {
         if (Array.isArray(parsed) && parsed.length > 0) return false;
       }
     } catch {}
-    return INITIAL_MENU_ITEMS.length === 0;
+    return true;
   });
 
   // Hero Image State
@@ -145,7 +145,7 @@ export default function App() {
     }
   });
 
-  // Shared Categories State (Persisted locally and auto-synced with products)
+  // Shared Categories State (Real-time Firestore collection sync + product category derivation)
   const [categories, setCategories] = useState<string[]>(() => {
     const DEFAULT_CATEGORIES = ['BURGERS', 'PIZZAS', 'FAST FOOD', 'DEALS', 'DRINKS'];
     try {
@@ -161,6 +161,21 @@ export default function App() {
     return DEFAULT_CATEGORIES;
   });
 
+  // Real-time Firestore subscriber for 'categories' collection
+  useEffect(() => {
+    const unsubscribe = subscribeToCategories(
+      (liveCategories) => {
+        if (liveCategories && liveCategories.length > 0) {
+          setCategories((prev) => Array.from(new Set([...liveCategories, ...prev])));
+        }
+      },
+      (err) => {
+        console.warn('[Firestore] Categories subscription note:', err);
+      }
+    );
+    return () => unsubscribe();
+  }, []);
+
   // Automatically merge any newly created product categories
   useEffect(() => {
     if (menuItems.length > 0) {
@@ -171,7 +186,7 @@ export default function App() {
     }
   }, [menuItems]);
 
-  // Persist categories to localStorage
+  // Persist categories to localStorage and sync with Firestore
   useEffect(() => {
     try {
       localStorage.setItem('shan_categories', JSON.stringify(categories));
@@ -180,29 +195,35 @@ export default function App() {
     }
   }, [categories]);
 
-  // Initialize store settings in background without blocking
+  // Category update handler for Admin Portal
+  const handleUpdateCategories = (newCategories: string[]) => {
+    setCategories(newCategories);
+    saveCategories(newCategories).catch((err) => {
+      console.warn('[Firestore] Error persisting categories to Firestore:', err);
+    });
+  };
+
+  // Initialize store settings and collections in background
   useEffect(() => {
     initializeFirestoreCollections().catch((err) => {
       console.warn('[Firestore] Initialization check note:', err);
     });
   }, []);
 
-  // 1. Live background Firestore sync for products (updates state and local cache)
+  // 1. Live real-time Firestore listener for products ('products' collection)
   useEffect(() => {
     const unsubscribe = subscribeToMenuItems(
       (liveItems) => {
-        if (liveItems && liveItems.length > 0) {
-          setMenuItems(liveItems);
-          try {
-            localStorage.setItem('shan_cached_menu_items', JSON.stringify(liveItems));
-          } catch (err) {
-            console.warn('[Cache] Could not write menu items to cache:', err);
-          }
+        setMenuItems(liveItems);
+        try {
+          localStorage.setItem('shan_cached_menu_items', JSON.stringify(liveItems));
+        } catch (err) {
+          console.warn('[Cache] Could not write menu items to cache:', err);
         }
         setIsLoadingMenu(false);
       },
       (err) => {
-        console.warn('[Firestore] Error fetching products, using cached/fallback menu:', err);
+        console.warn('[Firestore] Error fetching products:', err);
         setIsLoadingMenu(false);
       }
     );
@@ -612,7 +633,7 @@ export default function App() {
           <StaffDashboard
             menuItems={menuItems}
             categories={categories}
-            onUpdateCategories={setCategories}
+            onUpdateCategories={handleUpdateCategories}
             deliverySettings={deliverySettings}
             onUpdateDeliverySettings={handleUpdateDeliverySettings}
             onAddMenuItem={handleAddMenuItem}
