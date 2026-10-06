@@ -1,7 +1,7 @@
 export interface MenuItem {
   id: string;
   name: string;
-  category: 'BURGERS' | 'PIZZAS' | 'FAST FOOD' | 'DEALS';
+  category: string;
   price: number;
   originalPrice?: number;
   description: string;
@@ -38,3 +38,25 @@ export interface CustomerOrder {
 }
 
 export type StoreStatus = 'ACCEPTING' | 'BUSY' | 'PAUSED';
+
+export interface DeliverySettings {
+  standardFee: number;
+  freeDeliveryThreshold: number;
+  deliveryZone: string;
+}
+
+export const DEFAULT_DELIVERY_SETTINGS: DeliverySettings = {
+  standardFee: 120,
+  freeDeliveryThreshold: 1500,
+  deliveryZone: 'Korangi',
+};
+
+export interface StaffUser {
+  uid?: string;
+  email?: string;
+  name?: string;
+  role?: 'owner' | 'admin' | 'staff';
+  isAdmin: boolean;
+  isOwner: boolean;
+}
+

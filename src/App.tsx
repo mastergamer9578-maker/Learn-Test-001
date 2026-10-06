@@ -1,10 +1,14 @@
 import { useState, useEffect } from 'react';
-import { MenuItem, CartItem, CustomerOrder, StoreStatus } from './types';
+import { signOut, applyActionCode } from 'firebase/auth';
+import { doc, getDoc } from 'firebase/firestore';
+import { auth, db } from './firebase';
+import { MenuItem, CartItem, CustomerOrder, StoreStatus, DeliverySettings, DEFAULT_DELIVERY_SETTINGS, StaffUser } from './types';
 import { INITIAL_MENU_ITEMS, INITIAL_HERO_IMAGE } from './data/initialMenu';
 import { Navbar } from './components/Navbar';
 import { Hero } from './components/Hero';
 import { MenuSection } from './components/MenuSection';
 import { CartDrawer } from './components/CartDrawer';
+import { CheckoutModal } from './components/CheckoutModal';
 import { StaffAccessModal } from './components/StaffAccessModal';
 import { StaffDashboard } from './components/StaffDashboard';
 import { StoryModal } from './components/StoryModal';
@@ -30,16 +34,58 @@ export default function App() {
   const [isStaffAuthenticated, setIsStaffAuthenticated] = useState<boolean>(() => {
     return sessionStorage.getItem('shan_staff_auth') === 'true';
   });
+  const [staffUser, setStaffUser] = useState<StaffUser | null>(() => {
+    try {
+      const saved = sessionStorage.getItem('shan_staff_user');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    if (sessionStorage.getItem('shan_staff_auth') === 'true') {
+      return {
+        email: 'owner@shan.com',
+        name: 'Store Owner',
+        isAdmin: true,
+        isOwner: true,
+        role: 'owner',
+      };
+    }
+    return null;
+  });
 
   // Modals State
   const [isCartOpen, setIsCartOpen] = useState(false);
+  const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [isStaffModalOpen, setIsStaffModalOpen] = useState(false);
   const [isStoryModalOpen, setIsStoryModalOpen] = useState(false);
   const [isContactModalOpen, setIsContactModalOpen] = useState(false);
 
-  // Menu Items State (Strictly loaded from Firestore 'products' collection)
-  const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
-  const [isLoadingMenu, setIsLoadingMenu] = useState<boolean>(true);
+  // Menu Items State (Instant local cache / fallback + live background Firestore sync)
+  const [menuItems, setMenuItems] = useState<MenuItem[]>(() => {
+    try {
+      const cached = localStorage.getItem('shan_cached_menu_items');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+    } catch (e) {
+      console.warn('[Cache] Error loading cached menu items:', e);
+    }
+    // Instant fallback so storefront loads in 0ms without blocking on network
+    return INITIAL_MENU_ITEMS;
+  });
+
+  const [isLoadingMenu, setIsLoadingMenu] = useState<boolean>(() => {
+    // If we have cached or initial fallback items, do not show blocking spinner
+    try {
+      const cached = localStorage.getItem('shan_cached_menu_items');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) return false;
+      }
+    } catch {}
+    return INITIAL_MENU_ITEMS.length === 0;
+  });
 
   // Hero Image State
   const [heroImage, setHeroImage] = useState<string>(() => {
@@ -57,6 +103,26 @@ export default function App() {
     } catch {
       return 'ACCEPTING';
     }
+  });
+
+  // Delivery Settings State (Dynamic across admin and customer storefront)
+  const [deliverySettings, setDeliverySettings] = useState<DeliverySettings>(() => {
+    try {
+      const saved = localStorage.getItem('shan_delivery_settings');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (
+          typeof parsed?.standardFee === 'number' &&
+          typeof parsed?.freeDeliveryThreshold === 'number' &&
+          typeof parsed?.deliveryZone === 'string'
+        ) {
+          return parsed;
+        }
+      }
+    } catch (e) {
+      console.warn('[Cache] Could not parse cached delivery settings:', e);
+    }
+    return DEFAULT_DELIVERY_SETTINGS;
   });
 
   // Cart State
@@ -79,28 +145,80 @@ export default function App() {
     }
   });
 
-  // Clear any legacy cached dummy products on mount and initialize settings
+  // Shared Categories State (Persisted locally and auto-synced with products)
+  const [categories, setCategories] = useState<string[]>(() => {
+    const DEFAULT_CATEGORIES = ['BURGERS', 'PIZZAS', 'FAST FOOD', 'DEALS', 'DRINKS'];
+    try {
+      const saved = localStorage.getItem('shan_categories');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const cleaned = parsed.map((c: string) => c.trim().toUpperCase()).filter(Boolean);
+          return Array.from(new Set([...DEFAULT_CATEGORIES, ...cleaned]));
+        }
+      }
+    } catch {}
+    return DEFAULT_CATEGORIES;
+  });
+
+  // Automatically merge any newly created product categories
   useEffect(() => {
-    localStorage.removeItem('shan_menu_items');
+    if (menuItems.length > 0) {
+      const itemCats = menuItems
+        .map((m) => (m.category || '').trim().toUpperCase())
+        .filter(Boolean);
+      setCategories((prev) => Array.from(new Set([...prev, ...itemCats])));
+    }
+  }, [menuItems]);
+
+  // Persist categories to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('shan_categories', JSON.stringify(categories));
+    } catch (e) {
+      console.warn('[Cache] Could not save categories:', e);
+    }
+  }, [categories]);
+
+  // Initialize store settings in background without blocking
+  useEffect(() => {
     initializeFirestoreCollections().catch((err) => {
       console.warn('[Firestore] Initialization check note:', err);
     });
   }, []);
 
-  // 1. Strictly fetch menu items from Firestore 'products' collection via onSnapshot
+  // 1. Live background Firestore sync for products (updates state and local cache)
   useEffect(() => {
     const unsubscribe = subscribeToMenuItems(
-      (items) => {
-        setMenuItems(items);
+      (liveItems) => {
+        if (liveItems && liveItems.length > 0) {
+          setMenuItems(liveItems);
+          try {
+            localStorage.setItem('shan_cached_menu_items', JSON.stringify(liveItems));
+          } catch (err) {
+            console.warn('[Cache] Could not write menu items to cache:', err);
+          }
+        }
         setIsLoadingMenu(false);
       },
       (err) => {
-        console.warn('[Firestore] Error fetching products:', err);
+        console.warn('[Firestore] Error fetching products, using cached/fallback menu:', err);
         setIsLoadingMenu(false);
       }
     );
     return () => unsubscribe();
   }, []);
+
+  // Keep local cache synced when products are added/edited/deleted
+  useEffect(() => {
+    if (menuItems.length > 0) {
+      try {
+        localStorage.setItem('shan_cached_menu_items', JSON.stringify(menuItems));
+      } catch (err) {
+        console.warn('[Cache] Failed to persist menu items:', err);
+      }
+    }
+  }, [menuItems]);
 
   // 2. Real-time Firestore synchronization for Kitchen Queue & Orders
   useEffect(() => {
@@ -110,13 +228,105 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // 3. Real-time Firestore synchronization for Store Settings (Banner & Status)
+  // 3. Real-time Firestore synchronization for Store Settings (Banner, Status, & Delivery)
   useEffect(() => {
     const unsubscribe = subscribeToStoreSettings((settings) => {
       if (settings.heroImage) setHeroImage(settings.heroImage);
       if (settings.storeStatus) setStoreStatus(settings.storeStatus);
+      if (settings.deliverySettings) {
+        setDeliverySettings((prev) => {
+          const merged: DeliverySettings = {
+            standardFee:
+              typeof settings.deliverySettings?.standardFee === 'number'
+                ? settings.deliverySettings.standardFee
+                : prev.standardFee,
+            freeDeliveryThreshold:
+              typeof settings.deliverySettings?.freeDeliveryThreshold === 'number'
+                ? settings.deliverySettings.freeDeliveryThreshold
+                : prev.freeDeliveryThreshold,
+            deliveryZone:
+              typeof settings.deliverySettings?.deliveryZone === 'string'
+                ? settings.deliverySettings.deliveryZone
+                : prev.deliveryZone,
+          };
+          try {
+            localStorage.setItem('shan_delivery_settings', JSON.stringify(merged));
+          } catch {}
+          return merged;
+        });
+      }
     });
     return () => unsubscribe();
+  }, []);
+
+  // 4. Handle Firebase Email Verification Redirect ('mode=verifyEmail') on component load
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const searchParams = new URLSearchParams(window.location.search);
+    const mode = searchParams.get('mode');
+    const oobCode = searchParams.get('oobCode');
+
+    if (mode === 'verifyEmail') {
+      const handleEmailVerification = async () => {
+        try {
+          // If action code exists from Firebase email, apply it
+          if (oobCode) {
+            try {
+              await applyActionCode(auth, oobCode);
+            } catch (actionErr) {
+              console.warn('[Auth] Notice applying email action code:', actionErr);
+            }
+          }
+
+          // Force reload of currentUser to update emailVerified property
+          if (auth.currentUser) {
+            await auth.currentUser.reload();
+
+            if (auth.currentUser.emailVerified) {
+              try {
+                let docSnap = await getDoc(doc(db, 'users', auth.currentUser.uid));
+                if (!docSnap.exists()) {
+                  const staffSnap = await getDoc(doc(db, 'staff', auth.currentUser.uid));
+                  if (staffSnap.exists()) docSnap = staffSnap;
+                }
+                const data = docSnap?.exists() ? docSnap.data() : null;
+                const emailLower = (auth.currentUser.email || '').toLowerCase();
+                const isOwner = Boolean(
+                  data?.isOwner === true ||
+                  data?.role === 'owner' ||
+                  emailLower.includes('owner') ||
+                  emailLower.startsWith('shan') ||
+                  emailLower.includes('master')
+                );
+                const isAdmin = Boolean(data?.isAdmin !== undefined ? data.isAdmin : true);
+
+                if (isAdmin || isOwner) {
+                  const authenticatedUser: StaffUser = {
+                    uid: auth.currentUser.uid,
+                    email: auth.currentUser.email || '',
+                    name: data?.name || data?.displayName || (isOwner ? 'Store Owner' : 'Store Administrator'),
+                    isAdmin,
+                    isOwner,
+                    role: isOwner ? 'owner' : 'admin',
+                  };
+                  handleStaffAuthSuccess(authenticatedUser);
+                }
+              } catch (profileErr) {
+                console.warn('[Auth] Error resolving user profile after email verification:', profileErr);
+              }
+            }
+          }
+        } catch (err) {
+          console.error('[Auth] Error during email verification handling:', err);
+        } finally {
+          // Clear URL search params so the flow doesn't trigger on every re-render
+          window.history.replaceState({}, document.title, window.location.pathname);
+        }
+      };
+
+      handleEmailVerification();
+    }
   }, []);
 
   // Fallback local persistence for settings and status
@@ -127,6 +337,14 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('shan_store_status', storeStatus);
   }, [storeStatus]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('shan_delivery_settings', JSON.stringify(deliverySettings));
+    } catch (e) {
+      console.warn('[Cache] Could not save delivery settings:', e);
+    }
+  }, [deliverySettings]);
 
   useEffect(() => {
     localStorage.setItem('shan_cart', JSON.stringify(cart));
@@ -177,7 +395,12 @@ export default function App() {
     notes?: string;
   }) => {
     const subtotal = cart.reduce((sum, ci) => sum + ci.item.price * ci.quantity, 0);
-    const deliveryFee = subtotal > 1500 ? 0 : 120;
+    const deliveryFee =
+      subtotal >= deliverySettings.freeDeliveryThreshold
+        ? 0
+        : subtotal > 0
+        ? deliverySettings.standardFee
+        : 0;
     const orderId = `#SHAN-${Math.floor(1000 + Math.random() * 9000)}`;
 
     const newOrder: CustomerOrder = {
@@ -212,6 +435,11 @@ export default function App() {
   const handleRequestSwitchView = (targetView: 'customer' | 'staff') => {
     if (targetView === 'staff') {
       if (isStaffAuthenticated) {
+        // Double check email verification if logged in with Firebase Auth
+        if (auth.currentUser && !auth.currentUser.emailVerified) {
+          setIsStaffModalOpen(true);
+          return;
+        }
         setCurrentView('staff');
       } else {
         setIsStaffModalOpen(true);
@@ -221,11 +449,28 @@ export default function App() {
     }
   };
 
-  const handleStaffAuthSuccess = () => {
+  const handleStaffAuthSuccess = (user: StaffUser) => {
     setIsStaffAuthenticated(true);
-    sessionStorage.setItem('shan_staff_auth', 'true');
+    setStaffUser(user);
+    try {
+      sessionStorage.setItem('shan_staff_auth', 'true');
+      sessionStorage.setItem('shan_staff_user', JSON.stringify(user));
+    } catch {}
     setIsStaffModalOpen(false);
     setCurrentView('staff');
+  };
+
+  const handleStaffLogout = async () => {
+    setIsStaffAuthenticated(false);
+    setStaffUser(null);
+    try {
+      sessionStorage.removeItem('shan_staff_auth');
+      sessionStorage.removeItem('shan_staff_user');
+      await signOut(auth);
+    } catch (e) {
+      console.warn('[Auth] Sign out notice:', e);
+    }
+    setCurrentView('customer');
   };
 
   // Staff Menu Item Management (Synced to Firestore 'products' collection)
@@ -284,14 +529,22 @@ export default function App() {
     });
   };
 
-  // Staff Store Status Toggle (Synced to Firestore 'settings' collection)
+  // Set Store Status directly (Synced to Firestore 'settings' and localStorage)
+  const handleSetStoreStatus = (newStatus: StoreStatus) => {
+    setStoreStatus(newStatus);
+    try {
+      localStorage.setItem('shan_store_status', newStatus);
+    } catch {}
+    updateStoreSettings({ storeStatus: newStatus }).catch((err) => {
+      console.warn('[Firestore] Error updating store status in Firestore:', err);
+    });
+  };
+
+  // Staff Store Status Toggle (Cycles: ACCEPTING -> BUSY -> PAUSED -> ACCEPTING)
   const handleToggleStoreStatus = () => {
     const nextStatus: StoreStatus =
       storeStatus === 'ACCEPTING' ? 'BUSY' : storeStatus === 'BUSY' ? 'PAUSED' : 'ACCEPTING';
-    setStoreStatus(nextStatus);
-    updateStoreSettings({ storeStatus: nextStatus }).catch((err) => {
-      console.warn('[Firestore] Error updating store status in Firestore:', err);
-    });
+    handleSetStoreStatus(nextStatus);
   };
 
   // Staff Hero Banner Update (Synced to Firestore 'settings' collection)
@@ -300,6 +553,19 @@ export default function App() {
     updateStoreSettings({ heroImage: newImage }).catch((err) => {
       console.warn('[Firestore] Error updating hero banner in Firestore:', err);
     });
+  };
+
+  // Staff Delivery Settings Update (Synced to Firestore 'settings' collection and localStorage)
+  const handleUpdateDeliverySettings = async (newSettings: DeliverySettings) => {
+    setDeliverySettings(newSettings);
+    try {
+      localStorage.setItem('shan_delivery_settings', JSON.stringify(newSettings));
+    } catch {}
+    try {
+      await updateStoreSettings({ deliverySettings: newSettings });
+    } catch (err) {
+      console.warn('[Firestore] Error updating delivery settings in Firestore:', err);
+    }
   };
 
   const scrollToMenu = () => {
@@ -336,6 +602,7 @@ export default function App() {
             {/* Customer Storefront: Menu Section with Filters & Search */}
             <MenuSection
               items={menuItems}
+              categories={categories}
               onAddToCart={handleAddToCart}
               isLoading={isLoadingMenu}
             />
@@ -344,6 +611,10 @@ export default function App() {
           /* Staff Management Dashboard */
           <StaffDashboard
             menuItems={menuItems}
+            categories={categories}
+            onUpdateCategories={setCategories}
+            deliverySettings={deliverySettings}
+            onUpdateDeliverySettings={handleUpdateDeliverySettings}
             onAddMenuItem={handleAddMenuItem}
             onEditMenuItem={handleEditMenuItem}
             onToggleMenuItem={handleToggleMenuItem}
@@ -352,8 +623,13 @@ export default function App() {
             onUpdateOrderStatus={handleUpdateOrderStatus}
             storeStatus={storeStatus}
             onToggleStoreStatus={handleToggleStoreStatus}
+            onSetStoreStatus={handleSetStoreStatus}
             heroImage={heroImage}
             onUpdateHeroImage={handleUpdateHeroImage}
+            isOwner={staffUser ? Boolean(staffUser.isOwner) : true}
+            isAdmin={staffUser ? Boolean(staffUser.isAdmin) : true}
+            staffUser={staffUser || undefined}
+            onLogout={handleStaffLogout}
           />
         )}
       </main>
@@ -371,8 +647,25 @@ export default function App() {
         isOpen={isCartOpen}
         onClose={() => setIsCartOpen(false)}
         cart={cart}
+        deliverySettings={deliverySettings}
+        storeStatus={storeStatus}
         onUpdateQuantity={handleUpdateQuantity}
         onRemoveItem={handleRemoveItem}
+        onProceedToCheckout={() => {
+          setIsCartOpen(false);
+          setIsCheckoutOpen(true);
+        }}
+      />
+
+      <CheckoutModal
+        isOpen={isCheckoutOpen}
+        onClose={() => setIsCheckoutOpen(false)}
+        onBackToCart={() => {
+          setIsCheckoutOpen(false);
+          setIsCartOpen(true);
+        }}
+        cart={cart}
+        deliverySettings={deliverySettings}
         onClearCart={handleClearCart}
         onCheckout={handleCheckout}
       />

@@ -97,6 +97,11 @@ export const initializeFirestoreCollections = async (): Promise<void> => {
       await setDoc(settingsDocRef, {
         heroImage: INITIAL_HERO_IMAGE,
         storeStatus: 'ACCEPTING',
+        deliverySettings: {
+          standardFee: 120,
+          freeDeliveryThreshold: 1500,
+          deliveryZone: 'Korangi',
+        },
       });
     }
   } catch (err: any) {
@@ -374,7 +379,15 @@ export const updateOrderStatus = async (
  * Real-time subscription to Store Settings (Hero banner image & Store operational status)
  */
 export const subscribeToStoreSettings = (
-  onUpdate: (settings: { heroImage?: string; storeStatus?: StoreStatus }) => void,
+  onUpdate: (settings: {
+    heroImage?: string;
+    storeStatus?: StoreStatus;
+    deliverySettings?: {
+      standardFee?: number;
+      freeDeliveryThreshold?: number;
+      deliveryZone?: string;
+    };
+  }) => void,
   onError?: (error: Error) => void
 ): (() => void) => {
   try {
@@ -388,6 +401,7 @@ export const subscribeToStoreSettings = (
           onUpdate({
             heroImage: data.heroImage,
             storeStatus: data.storeStatus,
+            deliverySettings: data.deliverySettings,
           });
         }
       },
@@ -411,6 +425,11 @@ export const subscribeToStoreSettings = (
 export const updateStoreSettings = async (settings: {
   heroImage?: string;
   storeStatus?: StoreStatus;
+  deliverySettings?: {
+    standardFee?: number;
+    freeDeliveryThreshold?: number;
+    deliveryZone?: string;
+  };
 }): Promise<void> => {
   try {
     const settingsDocRef = doc(db, SETTINGS_COLLECTION, STORE_SETTINGS_DOC);

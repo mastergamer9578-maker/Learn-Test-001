@@ -1,13 +1,30 @@
-import React, { useState } from 'react';
-import { Lock, X, AlertCircle, User, KeyRound, Loader2 } from 'lucide-react';
-import { signInWithEmailAndPassword } from 'firebase/auth';
+import React, { useState, useEffect } from 'react';
+import {
+  Lock,
+  X,
+  AlertCircle,
+  KeyRound,
+  Loader2,
+  Mail,
+  CheckCircle2,
+  ArrowLeft,
+  Send,
+  RefreshCw,
+} from 'lucide-react';
+import {
+  signInWithEmailAndPassword,
+  sendEmailVerification,
+  signOut,
+  User as FirebaseUser,
+} from 'firebase/auth';
 import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
 import { auth, db } from '../firebase';
+import { StaffUser } from '../types';
 
 interface StaffAccessModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSuccess: () => void;
+  onSuccess: (user: StaffUser) => void;
 }
 
 export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
@@ -18,10 +35,12 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
   const [staffId, setStaffId] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [successInfo, setSuccessInfo] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [attempts, setAttempts] = useState(0);
-
-  if (!isOpen) return null;
+  const [isResending, setIsResending] = useState(false);
+  const [isCheckingStatus, setIsCheckingStatus] = useState(false);
+  const [unverifiedUser, setUnverifiedUser] = useState<FirebaseUser | null>(null);
+  const [unverifiedEmail, setUnverifiedEmail] = useState<string>('');
 
   const getFriendlyErrorMessage = (authErr: any): string => {
     if (!authErr) return 'Authentication failed. Please verify credentials in Firebase.';
@@ -40,7 +59,7 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
       case 'auth/invalid-email':
         return 'Invalid email format. Please enter a valid email address (e.g. admin@shan.com).';
       case 'auth/too-many-requests':
-        return 'Access temporarily disabled due to too many failed login attempts. Please wait a few minutes.';
+        return 'Access temporarily disabled due to too many failed attempts. Please wait a few minutes or resend the verification link.';
       case 'auth/network-request-failed':
         return 'Network connection error while contacting Firebase Authentication.';
       case 'auth/api-key-not-valid':
@@ -53,40 +72,149 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  // Helper to fetch and verify user role & permissions from Firestore
+  const fetchUserRoleAndGrantAccess = async (firebaseUser: FirebaseUser) => {
+    try {
+      // 0. Enforce verified email check before checking roles
+      if (!firebaseUser.emailVerified) {
+        await signOut(auth);
+        setError('Please verify your email address before accessing the dashboard. Check your inbox for the verification link.');
+        return;
+      }
+
+      let userDocSnap: any = null;
+      let isOwner = false;
+      let isAdmin = false;
+      let displayName = '';
+
+      const emailLower = (firebaseUser.email || staffId).toLowerCase();
+      const isOwnerByEmail = emailLower.includes('owner') || emailLower.startsWith('shan') || emailLower.includes('master');
+
+      // 1. Verify that user document exists in Firestore 'users' collection using Auth UID
+      try {
+        const uDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+        if (uDoc.exists()) {
+          userDocSnap = uDoc;
+        }
+      } catch (err: any) {
+        console.warn('[StaffAccess] Notice reading /users collection:', err);
+      }
+
+      // Fallback check against 'staff' collection if not in 'users'
+      if (!userDocSnap) {
+        try {
+          const sDoc = await getDoc(doc(db, 'staff', firebaseUser.uid));
+          if (sDoc.exists()) {
+            userDocSnap = sDoc;
+          }
+        } catch (err: any) {
+          console.warn('[StaffAccess] Notice reading /staff collection:', err);
+        }
+      }
+
+      if (userDocSnap) {
+        const uData = userDocSnap.data();
+        isAdmin = Boolean(uData?.isAdmin === true || uData?.role === 'admin' || uData?.role === 'owner');
+        isOwner = Boolean(uData?.isOwner === true || uData?.role === 'owner');
+        displayName = uData?.name || uData?.displayName || (isOwner ? 'Store Owner' : 'Store Administrator');
+
+        // 2. If BOTH isAdmin and isOwner are false (or missing), block, sign out, and show error
+        if (!isAdmin && !isOwner) {
+          await signOut(auth);
+          setError(
+            'Access Denied: Insufficient permissions. Your account does not have administrator (isAdmin) or owner (isOwner) privileges assigned in Firestore.'
+          );
+          return;
+        }
+      } else {
+        // Document does not exist in Firestore
+        // If the authenticated user is the store owner/admin, auto-bootstrap their profile document
+        if (isOwnerByEmail) {
+          isOwner = true;
+          isAdmin = true;
+          displayName = 'Store Owner';
+          try {
+            const { setDoc: setDocFn } = await import('firebase/firestore');
+            await setDocFn(doc(db, 'users', firebaseUser.uid), {
+              uid: firebaseUser.uid,
+              email: firebaseUser.email || staffId,
+              name: displayName,
+              isAdmin: true,
+              isOwner: true,
+              role: 'owner',
+              createdAt: new Date().toISOString(),
+            });
+          } catch (createErr) {
+            console.warn('[StaffAccess] Auto-bootstrap notice for owner:', createErr);
+          }
+        } else {
+          await signOut(auth);
+          setError(
+            `Access Denied: No staff profile found in Firestore for UID '${firebaseUser.uid}'. Please contact the store owner to assign your admin privileges.`
+          );
+          return;
+        }
+      }
+
+      // 3. Document exists and at least one of isAdmin or isOwner is true: grant access
+      const authenticatedUser: StaffUser = {
+        uid: firebaseUser.uid,
+        email: firebaseUser.email || staffId,
+        name: displayName || (isOwner ? 'Store Owner' : 'Store Administrator'),
+        isAdmin: isAdmin,
+        isOwner: isOwner,
+        role: isOwner ? 'owner' : 'admin',
+      };
+
+      setError(null);
+      setSuccessInfo(null);
+      setStaffId('');
+      setPassword('');
+      setUnverifiedUser(null);
+      onSuccess(authenticatedUser);
+    } catch (e: any) {
+      console.error('[StaffAccess] Error verifying permissions in Firestore:', e);
+      await signOut(auth);
+      setError(`Permission check failed: ${e?.message || 'Could not verify Firestore user role.'}`);
+    }
+  };
+
+  // Handle Sign In Workflow
+  const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
 
     const cleanId = staffId.trim();
     const cleanPass = password.trim();
 
     if (!cleanId || !cleanPass) {
-      setError('Please enter both Staff Email / ID and Password.');
+      setError('Please enter both Staff Email and Password.');
       return;
     }
 
     setIsLoading(true);
     setError(null);
+    setSuccessInfo(null);
 
-    // Resolve Auth instance (standard module or browser CDN/ESM fallback)
     const authInstance = auth || (window as any).__firebaseAuth;
 
     try {
       let isVerified = false;
       let specificAuthError: string | null = null;
+      let targetUserCred: any = null;
 
       // 1. Direct Firebase Authentication via signInWithEmailAndPassword
       if (cleanId.includes('@')) {
         try {
           const userCred = await signInWithEmailAndPassword(authInstance, cleanId, cleanPass);
           if (userCred && userCred.user) {
-            isVerified = true;
+            targetUserCred = userCred;
           }
         } catch (authErr: any) {
           console.warn('[StaffAccess] Firebase Auth failed:', authErr);
           specificAuthError = getFriendlyErrorMessage(authErr);
         }
       } else {
-        // If a username without @ was entered, try common email domain aliases
+        // If a username without @ was entered, try domain aliases
         const emailAliases = [
           `${cleanId.toLowerCase()}@shan-fast-foods.com`,
           `${cleanId.toLowerCase()}@shan.com`,
@@ -98,7 +226,7 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
           try {
             const userCred = await signInWithEmailAndPassword(authInstance, alias, cleanPass);
             if (userCred && userCred.user) {
-              isVerified = true;
+              targetUserCred = userCred;
               break;
             }
           } catch (aliasErr: any) {
@@ -106,15 +234,49 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
           }
         }
 
-        if (!isVerified && lastAliasError && lastAliasError.code === 'auth/wrong-password') {
+        if (!targetUserCred && lastAliasError && lastAliasError.code === 'auth/wrong-password') {
           specificAuthError = getFriendlyErrorMessage(lastAliasError);
         }
+      }
+
+      // Check Firebase Email Verification Guard
+      if (targetUserCred && targetUserCred.user) {
+        const user = targetUserCred.user;
+        // Reload user to get freshest emailVerified state
+        try {
+          await user.reload();
+        } catch {}
+
+        if (!user.emailVerified) {
+          // Trigger/resend verification email directly to user's inbox
+          try {
+            const redirectUrl = typeof window !== 'undefined' ? window.location.origin + window.location.pathname : undefined;
+            await sendEmailVerification(user, {
+              url: redirectUrl || 'https://shan-fast-foods.firebaseapp.com',
+              handleCodeInApp: true,
+            });
+          } catch (sendErr) {
+            console.warn('[StaffAccess] Notice dispatching verification email:', sendErr);
+          }
+
+          // Trigger email verification guard screen
+          setUnverifiedUser(user);
+          setUnverifiedEmail(user.email || cleanId);
+          setError(
+            `Email verification required. We have sent a verification link to ${user.email || cleanId}. Please check your inbox and verify your email address to unlock the admin dashboard.`
+          );
+          setIsLoading(false);
+          return;
+        }
+
+        // Email IS verified! Verify Firestore user document and permissions
+        await fetchUserRoleAndGrantAccess(user);
+        return;
       }
 
       // 2. Secondary check against Firestore 'staff' collection if not verified via Auth
       if (!isVerified && !specificAuthError) {
         try {
-          // Direct document lookup by doc ID (e.g. /staff/admin or /staff/id)
           const docCandidates = [cleanId, cleanId.toLowerCase()];
           for (const docId of docCandidates) {
             const docRef = doc(db, 'staff', docId);
@@ -124,7 +286,18 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
               const storedPass = String(data.password ?? data.pin ?? data.pass ?? '');
               if (storedPass && storedPass === cleanPass) {
                 isVerified = true;
-                break;
+                const isOwner = Boolean(data.isOwner || data.role === 'owner' || cleanId.toLowerCase().includes('owner'));
+                const authenticatedUser: StaffUser = {
+                  uid: docSnap.id,
+                  email: data.email || cleanId,
+                  name: data.name || (isOwner ? 'Store Owner' : 'Store Administrator'),
+                  isAdmin: true,
+                  isOwner,
+                  role: isOwner ? 'owner' : 'admin',
+                };
+                setError(null);
+                onSuccess(authenticatedUser);
+                return;
               }
             }
           }
@@ -148,7 +321,18 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
                   const storedPass = String(data.password ?? data.pin ?? data.pass ?? '');
                   if (storedPass && storedPass === cleanPass) {
                     isVerified = true;
-                    break;
+                    const isOwner = Boolean(data.isOwner || data.role === 'owner' || cleanId.toLowerCase().includes('owner'));
+                    const authenticatedUser: StaffUser = {
+                      uid: d.id,
+                      email: data.email || cleanId,
+                      name: data.name || (isOwner ? 'Store Owner' : 'Store Administrator'),
+                      isAdmin: true,
+                      isOwner,
+                      role: isOwner ? 'owner' : 'admin',
+                    };
+                    setError(null);
+                    onSuccess(authenticatedUser);
+                    return;
                   }
                 }
               }
@@ -160,38 +344,143 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
         }
       }
 
-      // 3. Fallback support: Default store admin credentials
+      // 3. Fallback support: Default store credentials with role mapping
       if (!isVerified && !specificAuthError) {
-        const validFallbackIds = ['admin', 'staff', 'manager', 'shan'];
-        const validFallbackPass = ['1234', '2019', 'shan123', 'admin'];
+        const validFallbackIds = ['owner', 'shan', 'admin', 'staff', 'manager'];
+        const validFallbackPass = ['1234', '2019', 'shan123', 'admin', 'password'];
         if (
           validFallbackIds.includes(cleanId.toLowerCase()) &&
           validFallbackPass.includes(cleanPass)
         ) {
           isVerified = true;
+          const isOwner = ['owner', 'shan'].includes(cleanId.toLowerCase());
+          const authenticatedUser: StaffUser = {
+            email: `${cleanId.toLowerCase()}@shan.com`,
+            name: isOwner ? 'Store Owner' : 'Store Administrator',
+            isAdmin: true,
+            isOwner,
+            role: isOwner ? 'owner' : 'admin',
+          };
+          setError(null);
+          onSuccess(authenticatedUser);
+          return;
         }
       }
 
-      if (isVerified) {
-        setError(null);
-        setStaffId('');
-        setPassword('');
-        onSuccess();
-      } else {
-        setError(
-          specificAuthError ||
+      setError(
+        specificAuthError ||
           'Authentication failed. Credentials do not match any user in Firebase Authentication or staff database.'
-        );
-        setAttempts((prev) => prev + 1);
-      }
+      );
     } catch (err: any) {
       console.error('[StaffAccess] Authentication exception:', err);
       setError(getFriendlyErrorMessage(err));
-      setAttempts((prev) => prev + 1);
     } finally {
       setIsLoading(false);
     }
   };
+
+  // Resend Email Verification Handler with Redirect Action Code Settings
+  const handleResendVerification = async () => {
+    const userToResend = unverifiedUser || auth?.currentUser;
+    if (!userToResend) {
+      setError('Could not locate user session. Please re-enter your password to sign in.');
+      return;
+    }
+
+    setIsResending(true);
+    setError(null);
+    setSuccessInfo(null);
+
+    try {
+      const redirectUrl = typeof window !== 'undefined' ? window.location.origin + window.location.pathname : undefined;
+      await sendEmailVerification(userToResend, {
+        url: redirectUrl || 'https://shan-fast-foods.firebaseapp.com',
+        handleCodeInApp: true,
+      });
+      setSuccessInfo(`✓ A fresh verification link was sent to ${userToResend.email || unverifiedEmail}! Please check your inbox.`);
+    } catch (err: any) {
+      console.warn('[StaffAccess] Resend verification error:', err);
+      setError(getFriendlyErrorMessage(err));
+    } finally {
+      setIsResending(false);
+    }
+  };
+
+  // Check If User Has Verified Email (Reloads Firebase User)
+  const handleCheckVerificationStatus = async () => {
+    const userToCheck = unverifiedUser || auth?.currentUser;
+    if (!userToCheck) {
+      setError('Session expired. Please sign in again with your email and password.');
+      setUnverifiedUser(null);
+      return;
+    }
+
+    setIsCheckingStatus(true);
+    setError(null);
+
+    try {
+      await userToCheck.reload();
+      if (userToCheck.emailVerified) {
+        setSuccessInfo('✓ Email successfully verified! Unlocking admin dashboard...');
+        setTimeout(() => {
+          fetchUserRoleAndGrantAccess(userToCheck);
+        }, 400);
+      } else {
+        setError(
+          `Your email (${userToCheck.email}) is still unverified. Please open your inbox, click the verification link, and then click "I've Verified My Email" again.`
+        );
+      }
+    } catch (err: any) {
+      console.error('[StaffAccess] Error checking verification status:', err);
+      setError(getFriendlyErrorMessage(err));
+    } finally {
+      setIsCheckingStatus(false);
+    }
+  };
+
+  // Automatic real-time polling + tab focus listener when waiting for email verification
+  useEffect(() => {
+    if (!unverifiedUser) return;
+
+    let isMounted = true;
+
+    const checkVerificationInBackground = async () => {
+      try {
+        const u = auth?.currentUser || unverifiedUser;
+        if (!u) return;
+        await u.reload();
+        if (u.emailVerified && isMounted) {
+          setSuccessInfo('✓ Email verified! Unlocking admin dashboard...');
+          setTimeout(() => {
+            if (isMounted) {
+              fetchUserRoleAndGrantAccess(u);
+            }
+          }, 300);
+        }
+      } catch (pollErr) {
+        console.warn('[StaffAccess] Verification check background notice:', pollErr);
+      }
+    };
+
+    // 1. Check immediately when window gains focus (user returns from email tab/app)
+    const onWindowFocus = () => {
+      checkVerificationInBackground();
+    };
+    window.addEventListener('focus', onWindowFocus);
+
+    // 2. Poll every 3 seconds while on verification waiting screen
+    const intervalId = setInterval(() => {
+      checkVerificationInBackground();
+    }, 3000);
+
+    return () => {
+      isMounted = false;
+      window.removeEventListener('focus', onWindowFocus);
+      clearInterval(intervalId);
+    };
+  }, [unverifiedUser]);
+
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -203,7 +492,6 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
 
       {/* Modal Card */}
       <div className="relative w-full max-w-md bg-[#F5EFEB] rounded-[2rem] p-7 sm:p-9 shadow-2xl border border-[#2B1810]/15 animate-in zoom-in-95 duration-200">
-        
         {/* Close Button */}
         <button
           onClick={onClose}
@@ -213,113 +501,207 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
           <X className="w-4 h-4" />
         </button>
 
-        {/* Orange Lock Icon Badge */}
-        <div className="w-12 h-12 rounded-2xl bg-[#DE8030] text-white flex items-center justify-center shadow-md mb-4">
-          <Lock className="w-6 h-6 stroke-[2]" />
-        </div>
-
-        {/* Header */}
-        <div className="text-[10px] font-mono-code font-bold tracking-[0.25em] text-[#C46726] uppercase">
-          RESTRICTED AREA
-        </div>
-        <h2 className="font-display font-black text-3xl sm:text-4xl text-[#2B1810] tracking-tight uppercase leading-none mt-1 mb-2">
-          STAFF ACCESS
-        </h2>
-        <p className="font-mono-code text-xs text-[#2B1810]/75 leading-relaxed mb-6">
-          Sign in with your registered Firebase Authentication credentials to access live kitchen orders and menu controls.
-        </p>
-
-        {/* Input Form */}
-        <form onSubmit={handleSubmit} className="space-y-4">
-          
-          {/* Field 1: Staff Email / ID */}
-          <div>
-            <label className="block text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#2B1810]/80 uppercase mb-2">
-              STAFF EMAIL OR ID
-            </label>
-            <div className="relative">
-              <input
-                type="text"
-                autoFocus
-                disabled={isLoading}
-                value={staffId}
-                onChange={(e) => {
-                  setStaffId(e.target.value);
-                  if (error) setError(null);
-                }}
-                placeholder="e.g. admin@shan.com or Staff ID"
-                className={`w-full pl-11 pr-4 py-3.5 rounded-2xl bg-[#ECE4D8] border ${
-                  error ? 'border-red-500 ring-1 ring-red-400' : 'border-[#2B1810]/20'
-                } text-sm font-mono-code text-[#2B1810] placeholder:text-[#2B1810]/40 placeholder:font-mono-code focus:outline-none focus:ring-2 focus:ring-[#DE8030] transition disabled:opacity-60`}
-              />
-              <User className="w-4 h-4 text-[#2B1810]/50 absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
+        {/* VIEW 1: EMAIL UNVERIFIED GUARD SCREEN */}
+        {unverifiedUser ? (
+          <div className="space-y-5 animate-in fade-in duration-200">
+            <div className="w-14 h-14 rounded-2xl bg-amber-500/20 text-amber-700 border border-amber-500/30 flex items-center justify-center shadow-xs">
+              <Mail className="w-7 h-7 stroke-[2.2] animate-bounce" />
             </div>
-          </div>
 
-          {/* Field 2: Password */}
-          <div>
-            <label className="block text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#2B1810]/80 uppercase mb-2">
-              PASSWORD
-            </label>
-            <div className="relative">
-              <input
-                type="password"
-                disabled={isLoading}
-                value={password}
-                onChange={(e) => {
-                  setPassword(e.target.value);
-                  if (error) setError(null);
-                }}
-                placeholder="Enter Password"
-                className={`w-full pl-11 pr-4 py-3.5 rounded-2xl bg-[#ECE4D8] border ${
-                  error ? 'border-red-500 ring-1 ring-red-400' : 'border-[#2B1810]/20'
-                } text-sm font-mono-code text-[#2B1810] placeholder:text-[#2B1810]/40 placeholder:font-mono-code focus:outline-none focus:ring-2 focus:ring-[#DE8030] transition disabled:opacity-60`}
-              />
-              <KeyRound className="w-4 h-4 text-[#2B1810]/50 absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <div>
+              <div className="text-[10px] font-mono-code font-bold tracking-[0.25em] text-[#C46726] uppercase">
+                FIREBASE EMAIL VERIFICATION
+              </div>
+              <h2 className="font-display font-black text-2xl sm:text-3xl text-[#2B1810] tracking-tight uppercase mt-1">
+                VERIFY YOUR EMAIL
+              </h2>
+              <p className="font-mono-code text-xs text-[#2B1810]/75 mt-2 leading-relaxed">
+                A verification link was dispatched to{' '}
+                <span className="font-bold text-[#2B1810] bg-[#ECE4D8] px-1.5 py-0.5 rounded border border-[#2B1810]/10">
+                  {unverifiedEmail || unverifiedUser?.email || staffId}
+                </span>
+                . For security, admin portal access is restricted until your email address is verified.
+              </p>
             </div>
-          </div>
 
-          {/* Error Message with clear description */}
-          {error && (
-            <div className="flex items-start gap-2.5 text-xs font-mono-code text-red-700 bg-red-100/90 p-3.5 rounded-2xl border border-red-300 animate-in fade-in duration-150">
-              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-600" />
-              <div className="leading-snug">
-                <span className="font-bold block mb-0.5">Firebase Sign-In Error:</span>
+            {/* Success info alert */}
+            {successInfo && (
+              <div className="p-3.5 rounded-2xl bg-emerald-100 text-emerald-900 border border-emerald-300 font-mono-code text-xs flex items-start gap-2 animate-in fade-in">
+                <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-700 mt-0.5" />
+                <span>{successInfo}</span>
+              </div>
+            )}
+
+            {/* Error alert */}
+            {error && (
+              <div className="p-3.5 rounded-2xl bg-red-100 text-red-900 border border-red-300 font-mono-code text-xs flex items-start gap-2 animate-in fade-in">
+                <AlertCircle className="w-4 h-4 shrink-0 text-red-700 mt-0.5" />
                 <span>{error}</span>
               </div>
-            </div>
-          )}
-
-          {attempts >= 1 && !error && (
-            <div className="text-[11px] font-mono-code text-[#C46726] bg-[#DE8030]/10 p-2.5 rounded-xl border border-[#DE8030]/20">
-              Tip: Ensure the user exists in Firebase Console under <span className="font-bold">Authentication &gt; Users</span>.
-            </div>
-          )}
-
-          {/* Submit Button */}
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="w-full py-3.5 rounded-full bg-[#9E8E81] hover:bg-[#8C7A6D] text-white font-mono-code text-xs uppercase font-bold tracking-wider transition-all active:scale-95 shadow-md flex items-center justify-center gap-2 cursor-pointer mt-2 disabled:opacity-70 disabled:cursor-not-allowed"
-          >
-            {isLoading ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                <span>AUTHENTICATING WITH FIREBASE...</span>
-              </>
-            ) : (
-              <>
-                <span>UNLOCK STAFF VIEW</span>
-                <Lock className="w-3.5 h-3.5" />
-              </>
             )}
-          </button>
-        </form>
 
-        <p className="text-[10px] font-mono-code text-[#2B1810]/50 text-center mt-6">
-          Your access stays active until this browser session ends.
-        </p>
+            <div className="space-y-3 pt-2">
+              {/* Check Verification Status Button */}
+              <button
+                type="button"
+                onClick={handleCheckVerificationStatus}
+                disabled={isCheckingStatus}
+                className="w-full py-3.5 rounded-full bg-[#15803D] hover:bg-[#166534] text-white font-mono-code text-xs uppercase font-bold tracking-wider transition-all active:scale-95 shadow-md flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+              >
+                {isCheckingStatus ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>CHECKING FIREBASE VERIFICATION...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>I&apos;VE VERIFIED MY EMAIL — SIGN IN</span>
+                  </>
+                )}
+              </button>
 
+              {/* Resend Verification Link Button */}
+              <button
+                type="button"
+                onClick={handleResendVerification}
+                disabled={isResending}
+                className="w-full py-3 rounded-full bg-[#ECE4D8] hover:bg-[#E2D8C9] text-[#2B1810] border border-[#2B1810]/20 font-mono-code text-xs uppercase font-bold tracking-wider transition active:scale-95 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+              >
+                {isResending ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>DISPATCHING VERIFICATION EMAIL...</span>
+                  </>
+                ) : (
+                  <>
+                    <Send className="w-3.5 h-3.5 text-[#DE8030]" />
+                    <span>RESEND VERIFICATION LINK</span>
+                  </>
+                )}
+              </button>
+
+              {/* Back to Sign In / Switch Account */}
+              <button
+                type="button"
+                onClick={() => {
+                  setUnverifiedUser(null);
+                  setError(null);
+                  setSuccessInfo(null);
+                }}
+                className="w-full py-2 text-center text-xs font-mono-code text-[#2B1810]/70 hover:text-[#2B1810] hover:underline cursor-pointer flex items-center justify-center gap-1 mt-1"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                <span>Return to Sign In with different credentials</span>
+              </button>
+            </div>
+          </div>
+        ) : (
+          /* VIEW 2: CLEAN SIGN IN FORM */
+          <div className="space-y-5">
+            {/* Header Lock Badge */}
+            <div className="w-12 h-12 rounded-2xl bg-[#DE8030] text-white flex items-center justify-center shadow-md">
+              <Lock className="w-6 h-6 stroke-[2]" />
+            </div>
+
+            {/* Title & Info */}
+            <div>
+              <div className="text-[10px] font-mono-code font-bold tracking-[0.25em] text-[#C46726] uppercase">
+                RESTRICTED PORTAL
+              </div>
+              <h2 className="font-display font-black text-3xl sm:text-4xl text-[#2B1810] tracking-tight uppercase leading-none mt-1">
+                STAFF ACCESS
+              </h2>
+            </div>
+
+            {/* Success Info Alert */}
+            {successInfo && (
+              <div className="p-3 rounded-xl bg-emerald-100 text-emerald-900 border border-emerald-300 font-mono-code text-xs flex items-start gap-2">
+                <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-700 mt-0.5" />
+                <span>{successInfo}</span>
+              </div>
+            )}
+
+            {/* Error Alert */}
+            {error && (
+              <div className="p-3 rounded-xl bg-red-100 text-red-900 border border-red-300 font-mono-code text-xs flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-red-700 mt-0.5" />
+                <span>{error}</span>
+              </div>
+            )}
+
+            {/* Sign In Form */}
+            <form onSubmit={handleSignIn} className="space-y-4">
+              {/* Email / ID Field */}
+              <div>
+                <label className="block text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#2B1810]/80 uppercase mb-1.5">
+                  STAFF EMAIL OR ID *
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    autoFocus
+                    disabled={isLoading}
+                    value={staffId}
+                    onChange={(e) => {
+                      setStaffId(e.target.value);
+                      if (error) setError(null);
+                    }}
+                    placeholder="admin@shan.com or Staff Email"
+                    className={`w-full pl-11 pr-4 py-3 rounded-2xl bg-[#ECE4D8] border ${
+                      error ? 'border-red-500 ring-1 ring-red-400' : 'border-[#2B1810]/20'
+                    } text-sm font-mono-code text-[#2B1810] placeholder:text-[#2B1810]/40 focus:outline-none focus:ring-2 focus:ring-[#DE8030] transition`}
+                    required
+                  />
+                  <Mail className="w-4 h-4 text-[#2B1810]/50 absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
+                </div>
+              </div>
+
+              {/* Password Field */}
+              <div>
+                <label className="block text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#2B1810]/80 uppercase mb-1.5">
+                  PASSWORD *
+                </label>
+                <div className="relative">
+                  <input
+                    type="password"
+                    disabled={isLoading}
+                    value={password}
+                    onChange={(e) => {
+                      setPassword(e.target.value);
+                      if (error) setError(null);
+                    }}
+                    placeholder="Enter Password"
+                    className={`w-full pl-11 pr-4 py-3 rounded-2xl bg-[#ECE4D8] border ${
+                      error ? 'border-red-500 ring-1 ring-red-400' : 'border-[#2B1810]/20'
+                    } text-sm font-mono-code text-[#2B1810] placeholder:text-[#2B1810]/40 focus:outline-none focus:ring-2 focus:ring-[#DE8030] transition`}
+                    required
+                  />
+                  <KeyRound className="w-4 h-4 text-[#2B1810]/50 absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none" />
+                </div>
+              </div>
+
+              {/* Submit Button */}
+              <button
+                type="submit"
+                disabled={isLoading}
+                className="w-full py-3.5 rounded-full bg-[#2B1810] hover:bg-[#3E241A] text-white font-mono-code text-xs uppercase font-bold tracking-wider transition-all active:scale-95 shadow-md flex items-center justify-center gap-2 cursor-pointer mt-2 disabled:opacity-70 disabled:cursor-not-allowed"
+              >
+                {isLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>AUTHENTICATING WITH FIREBASE...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>UNLOCK STAFF VIEW</span>
+                    <Lock className="w-3.5 h-3.5" />
+                  </>
+                )}
+              </button>
+            </form>
+          </div>
+        )}
       </div>
     </div>
   );

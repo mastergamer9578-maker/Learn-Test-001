@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { doc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 import {
@@ -6,7 +6,6 @@ import {
   TrendingUp,
   UtensilsCrossed,
   Image as ImageIcon,
-  Save,
   Sparkles,
   Store,
   Trash2,
@@ -24,9 +23,24 @@ import {
   ImagePlus,
   Pencil,
   AlertCircle,
-  Loader2
+  Loader2,
+  Layers,
+  Search,
+  Filter,
+  DollarSign,
+  ShoppingBag,
+  XCircle,
+  Calendar,
+  Settings as SettingsIcon,
+  Tag,
+  ArrowRight,
+  Truck,
+  ShieldCheck,
+  Shield,
+  Lock,
+  LogOut
 } from 'lucide-react';
-import { MenuItem, CustomerOrder, StoreStatus } from '../types';
+import { MenuItem, CustomerOrder, StoreStatus, DeliverySettings, StaffUser } from '../types';
 import { INITIAL_HERO_IMAGE } from '../data/initialMenu';
 
 // Helper to convert and compress uploaded files into clean Base64 data URLs
@@ -71,8 +85,14 @@ const readFileAsBase64 = (
   });
 };
 
+export type AdminTab = 'analytics' | 'products' | 'orders' | 'categories' | 'settings';
+
 interface StaffDashboardProps {
   menuItems: MenuItem[];
+  categories?: string[];
+  onUpdateCategories?: (cats: string[]) => void;
+  deliverySettings?: DeliverySettings;
+  onUpdateDeliverySettings?: (settings: DeliverySettings) => Promise<void> | void;
   onAddMenuItem: (item: Omit<MenuItem, 'id'>) => Promise<void> | void;
   onEditMenuItem?: (id: string, updates: Partial<MenuItem>) => Promise<void> | void;
   onToggleMenuItem: (id: string) => void;
@@ -81,12 +101,21 @@ interface StaffDashboardProps {
   onUpdateOrderStatus: (orderId: string, status: CustomerOrder['status']) => void;
   storeStatus: StoreStatus;
   onToggleStoreStatus: () => void;
+  onSetStoreStatus?: (status: StoreStatus) => void;
   heroImage: string;
   onUpdateHeroImage: (url: string) => void;
+  isOwner?: boolean;
+  isAdmin?: boolean;
+  staffUser?: StaffUser;
+  onLogout?: () => void;
 }
 
 export const StaffDashboard: React.FC<StaffDashboardProps> = ({
   menuItems,
+  categories,
+  onUpdateCategories,
+  deliverySettings,
+  onUpdateDeliverySettings,
   onAddMenuItem,
   onEditMenuItem,
   onToggleMenuItem,
@@ -95,19 +124,76 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
   onUpdateOrderStatus,
   storeStatus,
   onToggleStoreStatus,
+  onSetStoreStatus,
   heroImage,
   onUpdateHeroImage,
+  isOwner = true,
+  isAdmin = true,
+  staffUser,
+  onLogout,
 }) => {
-  // Hero Image Editor State with Local File Upload
+  // Navigation Tabs in the exact requested order: Orders (1st), Analytics (2nd), Products (3rd), Categories (4th), Settings (5th)
+  const [activeTab, setActiveTab] = useState<AdminTab>('orders');
+
+  // Categories State (managed dynamically with default presets and shared props)
+  const defaultCategories = ['BURGERS', 'PIZZAS', 'FAST FOOD', 'DEALS', 'DRINKS'];
+  const [customCategories, setCustomCategories] = useState<string[]>(() => {
+    const fromProps = (categories || []).map((c) => c.trim().toUpperCase());
+    const existing = menuItems.map((m) => (m.category || '').trim().toUpperCase());
+    return Array.from(new Set([...defaultCategories, ...fromProps, ...existing].filter(Boolean)));
+  });
+
+  // Enforce Access Guard: Disable direct access to Products and Categories for non-owner admins
+  useEffect(() => {
+    if (!isOwner && (activeTab === 'products' || activeTab === 'categories')) {
+      setActiveTab('orders');
+    }
+  }, [isOwner, activeTab]);
+
+  // Keep in sync if categories prop updates
+  useEffect(() => {
+    if (categories && categories.length > 0) {
+      const fromProps = categories.map((c) => c.trim().toUpperCase());
+      const existing = menuItems.map((m) => (m.category || '').trim().toUpperCase());
+      setCustomCategories(Array.from(new Set([...defaultCategories, ...fromProps, ...existing].filter(Boolean))));
+    }
+  }, [categories, menuItems]);
+
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [categorySuccessMsg, setCategorySuccessMsg] = useState<string | null>(null);
+
+  // Delivery Management State in Settings
+  const [deliveryFeeInput, setDeliveryFeeInput] = useState<string>(
+    String(deliverySettings?.standardFee ?? 120)
+  );
+  const [freeThresholdInput, setFreeThresholdInput] = useState<string>(
+    String(deliverySettings?.freeDeliveryThreshold ?? 1500)
+  );
+  const [deliveryZoneInput, setDeliveryZoneInput] = useState<string>(
+    deliverySettings?.deliveryZone || 'Korangi'
+  );
+  const [isSavingDelivery, setIsSavingDelivery] = useState(false);
+  const [deliverySavedFeedback, setDeliverySavedFeedback] = useState(false);
+
+  useEffect(() => {
+    if (deliverySettings) {
+      setDeliveryFeeInput(String(deliverySettings.standardFee));
+      setFreeThresholdInput(String(deliverySettings.freeDeliveryThreshold));
+      setDeliveryZoneInput(deliverySettings.deliveryZone);
+    }
+  }, [deliverySettings]);
+
+  // Hero Banner Editor State
   const bannerFileInputRef = useRef<HTMLInputElement>(null);
   const [bannerFileName, setBannerFileName] = useState<string>('');
   const [isBannerProcessing, setIsBannerProcessing] = useState(false);
   const [heroSavedFeedback, setHeroSavedFeedback] = useState(false);
 
-  // New Product Form State with Local File Upload
+  // New Product Form State
+  const [isAddProductExpanded, setIsAddProductExpanded] = useState(false);
   const productFileInputRef = useRef<HTMLInputElement>(null);
   const [newItemName, setNewItemName] = useState('');
-  const [newItemCategory, setNewItemCategory] = useState<MenuItem['category']>('BURGERS');
+  const [newItemCategory, setNewItemCategory] = useState<string>('BURGERS');
   const [newItemPrice, setNewItemPrice] = useState('');
   const [newItemOriginalPrice, setNewItemOriginalPrice] = useState('');
   const [newItemDescription, setNewItemDescription] = useState('');
@@ -119,10 +205,14 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
   const [productSuccessMessage, setProductSuccessMessage] = useState<string | null>(null);
   const [productErrorMessage, setProductErrorMessage] = useState<string | null>(null);
 
+  // Product List Search & Filter in Products Tab
+  const [productSearchQuery, setProductSearchQuery] = useState('');
+  const [productCategoryFilter, setProductCategoryFilter] = useState('ALL');
+
   // Edit Product Modal State
   const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
   const [editName, setEditName] = useState('');
-  const [editCategory, setEditCategory] = useState<MenuItem['category']>('BURGERS');
+  const [editCategory, setEditCategory] = useState<string>('BURGERS');
   const [editPrice, setEditPrice] = useState('');
   const [editOriginalPrice, setEditOriginalPrice] = useState('');
   const [editDescription, setEditDescription] = useState('');
@@ -130,52 +220,341 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
   // Delete Product State
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  const handleDeleteProduct = async (productId: string) => {
-    // 1. Confirmation popup before proceeding
-    const isConfirmed = window.confirm("Are you sure you want to delete this product?");
-    if (!isConfirmed) return;
+  // Orders Tab Filter (Active Queue)
+  const [orderQueueFilter, setOrderQueueFilter] = useState<'ALL' | 'PENDING' | 'PREPARING' | 'READY'>('ALL');
 
-    // 2. Log exact ID and auth state
-    console.log("Deleting Product ID:", productId, "Current User:", auth.currentUser?.uid);
+  // Analytics Order History Search & Filter
+  const [historySearchQuery, setHistorySearchQuery] = useState('');
+  const [historyStatusFilter, setHistoryStatusFilter] = useState<string>('ALL');
+
+  // Custom Glassmorphic Confirmation Modal State (replaces browser window.confirm)
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    itemName?: string;
+    confirmButtonText?: string;
+    onConfirm: () => Promise<void> | void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    itemName: '',
+    confirmButtonText: 'Yes, Proceed',
+    onConfirm: () => {},
+  });
+  const [isConfirmingAction, setIsConfirmingAction] = useState(false);
+
+  // Active / Kitchen Orders (PENDING, PREPARING, READY)
+  const openOrders = useMemo(() => {
+    return orders.filter(
+      (o) => o.status === 'PENDING' || o.status === 'PREPARING' || o.status === 'READY'
+    );
+  }, [orders]);
+
+  const filteredOpenOrders = useMemo(() => {
+    if (orderQueueFilter === 'ALL') return openOrders;
+    return openOrders.filter((o) => o.status === orderQueueFilter);
+  }, [openOrders, orderQueueFilter]);
+
+  // Analytics KPIs
+  const completedOrders = useMemo(() => orders.filter((o) => o.status === 'COMPLETED'), [orders]);
+  const cancelledOrders = useMemo(() => orders.filter((o) => o.status === 'CANCELLED'), [orders]);
+  const totalRevenue = useMemo(() => {
+    return completedOrders.reduce((sum, o) => sum + o.total, 0);
+  }, [completedOrders]);
+  const avgOrderValue = useMemo(() => {
+    return completedOrders.length > 0 ? Math.round(totalRevenue / completedOrders.length) : 0;
+  }, [totalRevenue, completedOrders]);
+
+  // Top Selling Items (from completed orders)
+  const topSellingItems = useMemo(() => {
+    const itemMap = new Map<string, { name: string; quantity: number; revenue: number }>();
+    completedOrders.forEach((o) => {
+      o.items.forEach((item) => {
+        const existing = itemMap.get(item.name) || { name: item.name, quantity: 0, revenue: 0 };
+        itemMap.set(item.name, {
+          name: item.name,
+          quantity: existing.quantity + item.quantity,
+          revenue: existing.revenue + item.price * item.quantity,
+        });
+      });
+    });
+    return Array.from(itemMap.values())
+      .sort((a, b) => b.quantity - a.quantity)
+      .slice(0, 5);
+  }, [completedOrders]);
+
+  // Filtered Products for Products Tab
+  const filteredProducts = useMemo(() => {
+    const normFilter = productCategoryFilter.trim().toUpperCase();
+    const query = productSearchQuery.trim().toLowerCase();
+
+    return menuItems.filter((item) => {
+      const normItemCat = (item.category || '').trim().toUpperCase();
+      const matchesCategory =
+        normFilter === 'ALL' || normItemCat === normFilter;
+      const matchesSearch =
+        !query ||
+        item.name.toLowerCase().includes(query) ||
+        item.description.toLowerCase().includes(query) ||
+        normItemCat.toLowerCase().includes(query);
+      return matchesCategory && matchesSearch;
+    });
+  }, [menuItems, productCategoryFilter, productSearchQuery]);
+
+  // Filtered History for Analytics Tab
+  const filteredOrderHistory = useMemo(() => {
+    return orders.filter((o) => {
+      const matchesStatus = historyStatusFilter === 'ALL' || o.status === historyStatusFilter;
+      const query = historySearchQuery.toLowerCase();
+      const matchesSearch =
+        o.id.toLowerCase().includes(query) ||
+        o.customerName.toLowerCase().includes(query) ||
+        o.customerPhone.includes(query);
+      return matchesStatus && matchesSearch;
+    });
+  }, [orders, historyStatusFilter, historySearchQuery]);
+
+  // Greeting
+  const hour = new Date().getHours();
+  const greeting =
+    hour < 12
+      ? 'GOOD MORNING, SHAN TEAM.'
+      : hour < 18
+      ? 'GOOD AFTERNOON, SHAN TEAM.'
+      : 'GOOD EVENING, SHAN TEAM.';
+
+  // Delivery Settings Handlers
+  const handleSaveDeliverySettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const fee = parseFloat(deliveryFeeInput);
+    const threshold = parseFloat(freeThresholdInput);
+    const zone = deliveryZoneInput.trim();
+
+    if (isNaN(fee) || fee < 0) {
+      alert('Please enter a valid standard delivery fee (0 or greater).');
+      return;
+    }
+    if (isNaN(threshold) || threshold < 0) {
+      alert('Please enter a valid free delivery threshold (0 or greater).');
+      return;
+    }
+    if (!zone) {
+      alert('Please enter a delivery zone name (e.g. Korangi).');
+      return;
+    }
+
+    const updatedSettings: DeliverySettings = {
+      standardFee: Math.round(fee),
+      freeDeliveryThreshold: Math.round(threshold),
+      deliveryZone: zone,
+    };
 
     try {
-      setDeletingId(productId);
-      // 3. Execute deleteDoc on Firestore products collection
-      await deleteDoc(doc(db, "products", productId));
-      console.log(`[Firestore] Successfully deleted product document "products/${productId}"`);
-    } catch (error: any) {
-      console.error("Error deleting product:", error);
-      alert(error.message);
-    } finally {
-      // 4. Update the UI state immediately without requiring a page refresh
-      if (onDeleteMenuItem) {
-        onDeleteMenuItem(productId);
+      setIsSavingDelivery(true);
+      if (onUpdateDeliverySettings) {
+        await onUpdateDeliverySettings(updatedSettings);
       }
-      setDeletingId(null);
+      setDeliverySavedFeedback(true);
+      setTimeout(() => setDeliverySavedFeedback(false), 3000);
+    } catch (err: any) {
+      console.error('Failed to save delivery settings:', err);
+      alert(err?.message || 'Failed to save delivery settings.');
+    } finally {
+      setIsSavingDelivery(false);
     }
   };
 
-  const handleCancelOrder = async (orderId: string) => {
-    // 1. Confirmation popup before proceeding
-    const isConfirmed = window.confirm("Are you sure you want to cancel this order?");
-    if (!isConfirmed) return;
+  const handleResetDeliverySettings = () => {
+    setDeliveryFeeInput('120');
+    setFreeThresholdInput('1500');
+    setDeliveryZoneInput('Korangi');
+    if (onUpdateDeliverySettings) {
+      onUpdateDeliverySettings({
+        standardFee: 120,
+        freeDeliveryThreshold: 1500,
+        deliveryZone: 'Korangi',
+      });
+    }
+    setDeliverySavedFeedback(true);
+    setTimeout(() => setDeliverySavedFeedback(false), 2500);
+  };
 
-    // 2. Log exact ID and auth state
-    console.log("Cancelling Order ID:", orderId, "Current User:", auth.currentUser?.uid);
+  // Direct Store Status Selector with Instant Global Sync & Feedback
+  const [statusFeedbackMsg, setStatusFeedbackMsg] = useState<string | null>(null);
+
+  const handleSelectStatus = (status: StoreStatus) => {
+    if (onSetStoreStatus) {
+      onSetStoreStatus(status);
+    } else {
+      if (storeStatus !== status) {
+        onToggleStoreStatus();
+      }
+    }
+    const label =
+      status === 'ACCEPTING'
+        ? 'Accepting Orders'
+        : status === 'BUSY'
+        ? 'Kitchen Busy'
+        : 'Orders Paused';
+    setStatusFeedbackMsg(`✓ Store status updated to "${label}"`);
+    setTimeout(() => setStatusFeedbackMsg(null), 3000);
+  };
+
+  // Prompt Product Deletion Modal
+  const promptDeleteProduct = (item: MenuItem) => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'DELETE PRODUCT',
+      message: `Are you sure you want to permanently delete "${item.name}" from the live menu? This cannot be undone and will sync immediately with Firestore.`,
+      itemName: item.name,
+      confirmButtonText: 'Yes, Proceed',
+      onConfirm: async () => {
+        const productId = item.id;
+        console.log("Deleting Product ID:", productId, "Current User:", auth.currentUser?.uid);
+        try {
+          setDeletingId(productId);
+          await deleteDoc(doc(db, "products", productId));
+          console.log(`[Firestore] Successfully deleted product document "products/${productId}"`);
+        } catch (error: any) {
+          console.error("Error deleting product:", error);
+          alert(error.message);
+        } finally {
+          if (onDeleteMenuItem) {
+            onDeleteMenuItem(productId);
+          }
+          setDeletingId(null);
+        }
+      },
+    });
+  };
+
+  // Prompt Order Cancellation Modal
+  const promptCancelOrder = (orderId: string) => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'CANCEL ORDER',
+      message: `Are you sure you want to cancel order ${orderId}? This will remove it from the active kitchen queue and update Firestore live.`,
+      itemName: `Order ${orderId}`,
+      confirmButtonText: 'Yes, Proceed',
+      onConfirm: async () => {
+        console.log("Cancelling Order ID:", orderId, "Current User:", auth.currentUser?.uid);
+        try {
+          await updateDoc(doc(db, "orders", orderId), { status: "CANCELLED" });
+          console.log(`[Firestore] Successfully cancelled order "orders/${orderId}"`);
+        } catch (error: any) {
+          console.error("Error cancelling order:", error);
+          alert(error.message);
+        } finally {
+          onUpdateOrderStatus(orderId, 'CANCELLED');
+        }
+      },
+    });
+  };
+
+  // Handle Local Device File Upload for Banner
+  const handleBannerFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
 
     try {
-      // 3. Execute updateDoc on Firestore orders collection with unique orderId
-      await updateDoc(doc(db, "orders", orderId), { status: "CANCELLED" });
-      console.log(`[Firestore] Successfully cancelled order "orders/${orderId}"`);
-    } catch (error: any) {
-      console.error("Error cancelling order:", error);
-      alert(error.message);
+      setIsBannerProcessing(true);
+      const base64 = await readFileAsBase64(file, 1600, 1000, 0.85);
+      setBannerFileName(file.name);
+      onUpdateHeroImage(base64);
+      setHeroSavedFeedback(true);
+      setTimeout(() => setHeroSavedFeedback(false), 2500);
+    } catch (err) {
+      console.error('Failed to read banner image file:', err);
     } finally {
-      // 4. Update the UI state immediately to remove from live kitchen queue
-      onUpdateOrderStatus(orderId, 'CANCELLED');
+      setIsBannerProcessing(false);
     }
   };
 
+  const handleResetDefaultBanner = () => {
+    onUpdateHeroImage(INITIAL_HERO_IMAGE);
+    setBannerFileName('');
+    if (bannerFileInputRef.current) bannerFileInputRef.current.value = '';
+    setHeroSavedFeedback(true);
+    setTimeout(() => setHeroSavedFeedback(false), 2000);
+  };
+
+  // Handle Product Image Upload
+  const handleProductImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      setIsProductImageProcessing(true);
+      const base64 = await readFileAsBase64(file, 800, 800, 0.85);
+      setProductImageBase64(base64);
+      setProductImageFileName(file.name);
+    } catch (err) {
+      console.error('Failed to read product image file:', err);
+    } finally {
+      setIsProductImageProcessing(false);
+    }
+  };
+
+  // Handle Adding Product
+  const handleSaveProduct = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newItemName.trim() || !newItemPrice.trim()) return;
+
+    const priceNum = parseFloat(newItemPrice);
+    if (isNaN(priceNum) || priceNum <= 0) return;
+
+    const origPriceNum = newItemOriginalPrice ? parseFloat(newItemOriginalPrice) : undefined;
+    const defaultPlaceholderImage =
+      newItemCategory === 'BURGERS'
+        ? 'https://images.unsplash.com/photo-1568901346375-23c9450c58cd?auto=format&fit=crop&w=800&q=80'
+        : newItemCategory === 'PIZZAS'
+        ? 'https://images.unsplash.com/photo-1513104890138-7c749659a591?auto=format&fit=crop&w=800&q=80'
+        : 'https://images.unsplash.com/photo-1562967914-608f82629710?auto=format&fit=crop&w=800&q=80';
+
+    const finalImage = productImageBase64 || defaultPlaceholderImage;
+    const addedTitle = newItemName.trim();
+
+    try {
+      setIsSubmittingProduct(true);
+      setProductErrorMessage(null);
+
+      await onAddMenuItem({
+        name: addedTitle,
+        category: newItemCategory,
+        price: priceNum,
+        originalPrice: origPriceNum,
+        description: newItemDescription.trim() || 'Freshly made to order.',
+        image: finalImage,
+        tag: origPriceNum ? 'SPECIAL DEAL' : undefined,
+        isAvailable: true,
+      });
+
+      // Reset form
+      setNewItemName('');
+      setNewItemPrice('');
+      setNewItemOriginalPrice('');
+      setNewItemDescription('');
+      setProductImageBase64('');
+      setProductImageFileName('');
+      if (productFileInputRef.current) productFileInputRef.current.value = '';
+
+      setProductSavedFeedback(true);
+      setProductSuccessMessage(`✓ "${addedTitle}" saved directly to Firestore and is live!`);
+      setTimeout(() => {
+        setProductSavedFeedback(false);
+        setProductSuccessMessage(null);
+      }, 5000);
+    } catch (err: any) {
+      console.error('[StaffDashboard] Error adding product to Firestore:', err);
+      setProductErrorMessage(err?.message || 'Failed to save product to Firestore.');
+    } finally {
+      setIsSubmittingProduct(false);
+    }
+  };
+
+  // Edit Product Handlers
   const handleStartEdit = (item: MenuItem) => {
     setEditingItem(item);
     setEditName(item.name);
@@ -195,170 +574,116 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
 
     if (onEditMenuItem) {
       onEditMenuItem(editingItem.id, {
-        name: editName.trim().toUpperCase(),
+        name: editName.trim(),
         category: editCategory,
         price: priceNum,
-        originalPrice: origPriceNum && origPriceNum > priceNum ? origPriceNum : undefined,
+        originalPrice: origPriceNum,
         description: editDescription.trim(),
       });
     }
     setEditingItem(null);
   };
 
-  // Derived metrics
-  const openOrders = orders.filter((o) => o.status !== 'COMPLETED' && o.status !== 'CANCELLED');
-  const completedRevenue = orders
-    .filter((o) => o.status === 'COMPLETED')
-    .reduce((sum, o) => sum + o.total, 0);
-  const liveProductsCount = menuItems.filter((m) => m.isAvailable).length;
-
-  // Time based greeting
-  const hour = new Date().getHours();
-  const greeting =
-    hour < 12
-      ? 'GOOD MORNING, SHAN TEAM.'
-      : hour < 18
-      ? 'GOOD AFTERNOON, SHAN TEAM.'
-      : 'GOOD EVENING, SHAN TEAM.';
-
-  // Handle Local Device File Upload for Banner
-  const handleBannerFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    try {
-      setIsBannerProcessing(true);
-      const base64 = await readFileAsBase64(file, 1600, 1000, 0.85);
-      setBannerFileName(file.name);
-      onUpdateHeroImage(base64);
-      setHeroSavedFeedback(true);
-      setTimeout(() => setHeroSavedFeedback(false), 2500);
-    } catch (err) {
-      console.error('Failed to read image file:', err);
-    } finally {
-      setIsBannerProcessing(false);
-    }
-  };
-
-  const handleResetDefaultBanner = () => {
-    onUpdateHeroImage(INITIAL_HERO_IMAGE);
-    setBannerFileName('');
-    if (bannerFileInputRef.current) bannerFileInputRef.current.value = '';
-    setHeroSavedFeedback(true);
-    setTimeout(() => setHeroSavedFeedback(false), 2000);
-  };
-
-  // Handle Local Device File Upload for New Product
-  const handleProductFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    try {
-      setIsProductImageProcessing(true);
-      setProductErrorMessage(null);
-      // Fast compression for Firestore document size safety
-      const base64 = await readFileAsBase64(file, 650, 480, 0.75);
-      setProductImageBase64(base64);
-      setProductImageFileName(file.name);
-    } catch (err) {
-      console.error('Failed to read product image file:', err);
-      setProductErrorMessage('Could not process the selected image file. Please try a different photo.');
-    } finally {
-      setIsProductImageProcessing(false);
-    }
-  };
-
-  const handleCreateProduct = async (e: React.FormEvent) => {
+  // Add Category Handler
+  const handleAddCategory = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newItemName.trim() || !newItemPrice || !newItemDescription.trim()) {
-      setProductErrorMessage('Please fill in all required fields (Name, Price, Description).');
+    const formatted = newCategoryName.trim().toUpperCase();
+    if (!formatted) return;
+
+    if (customCategories.some((c) => c.trim().toUpperCase() === formatted)) {
+      alert(`Category "${formatted}" already exists!`);
       return;
     }
 
-    const priceNum = parseFloat(newItemPrice);
-    if (isNaN(priceNum) || priceNum <= 0) {
-      setProductErrorMessage('Please enter a valid price in PKR (greater than 0).');
-      return;
-    }
-
-    setIsSubmittingProduct(true);
-    setProductErrorMessage(null);
-    setProductSuccessMessage(null);
-
-    const defaultImages: Record<MenuItem['category'], string> = {
-      BURGERS: 'https://images.unsplash.com/photo-1568901346375-23c9450c58cd?auto=format&fit=crop&w=800&q=80',
-      PIZZAS: 'https://images.unsplash.com/photo-1513104890138-7c749659a591?auto=format&fit=crop&w=800&q=80',
-      'FAST FOOD': 'https://images.unsplash.com/photo-1585109649139-366815a0d713?auto=format&fit=crop&w=800&q=80',
-      DEALS: 'https://images.unsplash.com/photo-1550547660-d9450f859349?auto=format&fit=crop&w=800&q=80',
-    };
-
-    const addedTitle = newItemName.trim().toUpperCase();
-    const origPriceNum = newItemOriginalPrice ? parseFloat(newItemOriginalPrice) : undefined;
-
+    const updated = [...customCategories, formatted];
+    setCustomCategories(updated);
+    if (onUpdateCategories) onUpdateCategories(updated);
     try {
-      await onAddMenuItem({
-        name: addedTitle,
-        category: newItemCategory,
-        price: priceNum,
-        originalPrice: origPriceNum && origPriceNum > priceNum ? origPriceNum : undefined,
-        description: newItemDescription.trim(),
-        image: productImageBase64 || defaultImages[newItemCategory],
-        tag: 'NEW ARRIVAL',
-        isAvailable: true,
-      });
+      localStorage.setItem('shan_categories', JSON.stringify(updated));
+    } catch {}
+    setNewCategoryName('');
+    setCategorySuccessMsg(`✓ Category "${formatted}" added successfully.`);
+    setTimeout(() => setCategorySuccessMsg(null), 3000);
+  };
 
-      // Clear input fields on successful write
-      setNewItemName('');
-      setNewItemPrice('');
-      setNewItemOriginalPrice('');
-      setNewItemDescription('');
-      setProductImageBase64('');
-      setProductImageFileName('');
-      if (productFileInputRef.current) productFileInputRef.current.value = '';
-
-      setProductSavedFeedback(true);
-      setProductSuccessMessage(`✓ "${addedTitle}" successfully saved directly to Firestore 'products' and is now live on the storefront!`);
-      setTimeout(() => {
-        setProductSavedFeedback(false);
-        setProductSuccessMessage(null);
-      }, 5000);
-    } catch (err: any) {
-      console.error('[StaffDashboard] Error adding product to Firestore:', err);
-      setProductErrorMessage(
-        err?.message || 'Failed to save product to Firestore. Please check your network and Firestore rules.'
-      );
-    } finally {
-      setIsSubmittingProduct(false);
-    }
+  // Delete Category Handler
+  const promptDeleteCategory = (cat: string) => {
+    const normCat = cat.trim().toUpperCase();
+    const itemsInCat = menuItems.filter((m) => (m.category || '').trim().toUpperCase() === normCat).length;
+    setConfirmModal({
+      isOpen: true,
+      title: 'DELETE CATEGORY',
+      message:
+        itemsInCat > 0
+          ? `Category "${normCat}" contains ${itemsInCat} active menu items. Are you sure you want to remove this category from the list?`
+          : `Are you sure you want to delete the "${normCat}" category?`,
+      itemName: normCat,
+      confirmButtonText: 'Yes, Delete',
+      onConfirm: () => {
+        const updated = customCategories.filter((c) => c.trim().toUpperCase() !== normCat);
+        setCustomCategories(updated);
+        if (onUpdateCategories) onUpdateCategories(updated);
+        try {
+          localStorage.setItem('shan_categories', JSON.stringify(updated));
+        } catch {}
+      },
+    });
   };
 
   return (
-    <div className="py-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-10 animate-in fade-in duration-300">
+    <div className="py-8 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-8 animate-in fade-in duration-300">
       
-      {/* Top Banner / Greeting and Store Status matching Screenshot 7 */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+      {/* Top Banner / Greeting and Status Quick Bar */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 pb-2 border-b border-[#2B1810]/10">
         <div>
           <div className="flex items-center gap-2 text-xs font-mono-code font-bold tracking-[0.25em] text-[#C46726] uppercase mb-1">
             <span className="w-2 h-2 rounded-full bg-[#2E7D32] animate-pulse"></span>
-            <span>LIVE OPERATIONS</span>
+            <span>SHAN FAST FOODS • ADMIN PORTAL</span>
           </div>
-          <h1 className="font-display font-black text-4xl sm:text-5xl lg:text-6xl text-[#2B1810] tracking-tight uppercase leading-none">
+          <h1 className="font-display font-black text-3xl sm:text-4xl lg:text-5xl text-[#2B1810] tracking-tight uppercase leading-none">
             {greeting}
           </h1>
-          <p className="font-mono-code text-xs sm:text-sm text-[#2B1810]/75 mt-2 max-w-xl">
-            Keep the kitchen moving. New customer orders appear here instantly.
+          <p className="font-mono-code text-xs sm:text-sm text-[#2B1810]/75 mt-2">
+            Real-time kitchen orders, menu pricing, analytics, and store configurations.
           </p>
+
+          {/* User Role & Permission Level Indicator (driven strictly by Firestore user role) */}
+          <div className="flex flex-wrap items-center gap-2 mt-3.5">
+            {isOwner ? (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#DE8030]/15 text-[#C46726] border border-[#DE8030]/30 text-[11px] font-mono-code font-bold uppercase">
+                <ShieldCheck className="w-3.5 h-3.5 text-[#DE8030]" />
+                <span>ROLE: STORE OWNER (FULL 5-TAB ACCESS)</span>
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-500/15 text-blue-800 border border-blue-500/30 text-[11px] font-mono-code font-bold uppercase">
+                <Shield className="w-3.5 h-3.5 text-blue-600" />
+                <span>ROLE: ADMIN (RESTRICTED ACCESS — ORDERS, ANALYTICS & SETTINGS)</span>
+              </span>
+            )}
+
+            {onLogout && (
+              <button
+                type="button"
+                onClick={onLogout}
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#2B1810]/5 hover:bg-red-500/10 text-[#2B1810]/75 hover:text-red-700 border border-[#2B1810]/15 hover:border-red-500/30 text-[11px] font-mono-code font-bold uppercase transition cursor-pointer"
+                title="Sign out from Staff Session"
+              >
+                <LogOut className="w-3 h-3" />
+                <span>Sign Out / Lock</span>
+              </button>
+            )}
+          </div>
         </div>
 
-        {/* Store Status Toggle Widget */}
-        <div className="bg-[#2B1810] text-[#F5EFEB] rounded-2xl p-4 sm:p-5 flex items-center justify-between gap-6 shadow-xl shrink-0 border border-[#2B1810]/20">
+        {/* Store Status Quick Widget with Synchronized Toggle */}
+        <div className="bg-[#2B1810] text-[#F5EFEB] rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 sm:gap-6 shadow-xl shrink-0 border border-[#2B1810]/20">
           <div className="flex items-center gap-3.5">
-            <div className="w-11 h-11 rounded-xl bg-[#DE8030] text-[#2B1810] flex items-center justify-center">
+            <div className="w-10 h-10 rounded-xl bg-[#DE8030] text-[#2B1810] flex items-center justify-center shrink-0">
               <Store className="w-5 h-5 stroke-[2.2]" />
             </div>
             <div>
               <div className="text-[10px] font-mono-code tracking-[0.2em] uppercase text-[#F5EFEB]/60">
-                STORE STATUS
+                CURRENT STORE STATUS
               </div>
               <div className="flex items-center gap-2 font-mono-code text-xs sm:text-sm font-semibold mt-0.5">
                 <span
@@ -370,191 +695,864 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
                       : 'bg-red-400'
                   }`}
                 />
-                <span>
+                <span className="font-bold">
                   {storeStatus === 'ACCEPTING'
-                    ? 'Accepting orders'
+                    ? 'Accepting Orders'
                     : storeStatus === 'BUSY'
-                    ? 'High volume (Busy)'
-                    : 'Paused / Closed'}
+                    ? 'Kitchen Busy'
+                    : 'Orders Paused'}
                 </span>
               </div>
             </div>
           </div>
 
+          <div className="flex items-center gap-2 self-start sm:self-center">
+            <button
+              type="button"
+              onClick={onToggleStoreStatus}
+              title={`Currently: ${storeStatus}. Click to cycle store status.`}
+              className={`px-3.5 py-1.5 rounded-full text-xs font-mono-code uppercase font-bold tracking-wider transition-all flex items-center gap-1.5 cursor-pointer shadow-xs active:scale-95 ${
+                storeStatus === 'ACCEPTING'
+                  ? 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 border border-emerald-500/40'
+                  : storeStatus === 'BUSY'
+                  ? 'bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 border border-amber-500/40'
+                  : 'bg-red-500/20 text-red-300 hover:bg-red-500/30 border border-red-500/40'
+              }`}
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>
+                Toggle ({storeStatus === 'ACCEPTING' ? 'Set Busy' : storeStatus === 'BUSY' ? 'Pause' : 'Accept'})
+              </span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Modern Tab Navigation Bar (in the exact requested order) */}
+      <div className="bg-[#ECE4D8]/80 backdrop-blur-xs p-1.5 rounded-2xl border border-[#2B1810]/15 shadow-sm">
+        <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none">
+          
+          {/* 1. Orders (1st) */}
           <button
-            onClick={onToggleStoreStatus}
-            className="px-3.5 py-1.5 rounded-full border border-[#F5EFEB]/20 text-[11px] font-mono-code uppercase hover:bg-white/10 transition active:scale-95 cursor-pointer text-[#F5EFEB]"
-            title="Click to cycle status"
+            type="button"
+            onClick={() => setActiveTab('orders')}
+            className={`flex items-center gap-2 px-4 sm:px-5 py-2.5 rounded-xl font-mono-code text-xs sm:text-sm font-bold uppercase tracking-wider transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+              activeTab === 'orders'
+                ? 'bg-[#2B1810] text-[#F5EFEB] shadow-md'
+                : 'text-[#2B1810]/70 hover:bg-[#2B1810]/5 hover:text-[#2B1810]'
+            }`}
           >
-            Change
+            <Clock className="w-4 h-4" />
+            <span>Orders</span>
+            {openOrders.length > 0 && (
+              <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-[#DE8030] text-[#2B1810] animate-pulse">
+                {openOrders.length}
+              </span>
+            )}
           </button>
+
+          {/* 2. Analytics & Insights (2nd) */}
+          <button
+            type="button"
+            onClick={() => setActiveTab('analytics')}
+            className={`flex items-center gap-2 px-4 sm:px-5 py-2.5 rounded-xl font-mono-code text-xs sm:text-sm font-bold uppercase tracking-wider transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+              activeTab === 'analytics'
+                ? 'bg-[#2B1810] text-[#F5EFEB] shadow-md'
+                : 'text-[#2B1810]/70 hover:bg-[#2B1810]/5 hover:text-[#2B1810]'
+            }`}
+          >
+            <TrendingUp className="w-4 h-4" />
+            <span>Analytics & Insights</span>
+          </button>
+
+          {/* 3. Products (3rd) - Restrict to Owner Only */}
+          {isOwner && (
+            <button
+              type="button"
+              onClick={() => setActiveTab('products')}
+              className={`flex items-center gap-2 px-4 sm:px-5 py-2.5 rounded-xl font-mono-code text-xs sm:text-sm font-bold uppercase tracking-wider transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                activeTab === 'products'
+                  ? 'bg-[#2B1810] text-[#F5EFEB] shadow-md'
+                  : 'text-[#2B1810]/70 hover:bg-[#2B1810]/5 hover:text-[#2B1810]'
+              }`}
+            >
+              <Package className="w-4 h-4" />
+              <span>Products</span>
+              <span
+                className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+                  activeTab === 'products' ? 'bg-[#DE8030] text-[#2B1810]' : 'bg-[#2B1810]/10 text-[#2B1810]'
+                }`}
+              >
+                {menuItems.length}
+              </span>
+            </button>
+          )}
+
+          {/* 4. Categories (4th) - Restrict to Owner Only */}
+          {isOwner && (
+            <button
+              type="button"
+              onClick={() => setActiveTab('categories')}
+              className={`flex items-center gap-2 px-4 sm:px-5 py-2.5 rounded-xl font-mono-code text-xs sm:text-sm font-bold uppercase tracking-wider transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                activeTab === 'categories'
+                  ? 'bg-[#2B1810] text-[#F5EFEB] shadow-md'
+                  : 'text-[#2B1810]/70 hover:bg-[#2B1810]/5 hover:text-[#2B1810]'
+              }`}
+            >
+              <Layers className="w-4 h-4" />
+              <span>Categories</span>
+              <span
+                className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+                  activeTab === 'categories' ? 'bg-[#DE8030] text-[#2B1810]' : 'bg-[#2B1810]/10 text-[#2B1810]'
+                }`}
+              >
+                {customCategories.length}
+              </span>
+            </button>
+          )}
+
+          {/* 5. Settings (5th) */}
+          <button
+            type="button"
+            onClick={() => setActiveTab('settings')}
+            className={`flex items-center gap-2 px-4 sm:px-5 py-2.5 rounded-xl font-mono-code text-xs sm:text-sm font-bold uppercase tracking-wider transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+              activeTab === 'settings'
+                ? 'bg-[#2B1810] text-[#F5EFEB] shadow-md'
+                : 'text-[#2B1810]/70 hover:bg-[#2B1810]/5 hover:text-[#2B1810]'
+            }`}
+          >
+            <SettingsIcon className="w-4 h-4" />
+            <span>Settings</span>
+          </button>
+
         </div>
       </div>
 
-      {/* Summary Metrics Cards (3 columns) matching Screenshot 7 */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 sm:gap-6">
-        {/* Metric 1: Open Orders */}
-        <div className="bg-[#ECE4D8]/80 border border-[#2B1810]/15 rounded-3xl p-6 shadow-sm flex flex-col justify-between">
-          <div className="flex items-center gap-2 text-xs font-mono-code font-bold tracking-wider text-[#2B1810]/70 uppercase">
-            <Package className="w-4 h-4 text-[#DE8030]" />
-            <span>OPEN ORDERS</span>
-          </div>
-          <div className="font-display font-black text-5xl sm:text-6xl text-[#2B1810] mt-4">
-            {openOrders.length}
-          </div>
-        </div>
-
-        {/* Metric 2: Completed Revenue */}
-        <div className="bg-[#ECE4D8]/80 border border-[#2B1810]/15 rounded-3xl p-6 shadow-sm flex flex-col justify-between">
-          <div className="flex items-center gap-2 text-xs font-mono-code font-bold tracking-wider text-[#2B1810]/70 uppercase">
-            <TrendingUp className="w-4 h-4 text-[#2E7D32]" />
-            <span>COMPLETED REVENUE</span>
-          </div>
-          <div className="font-display font-black text-4xl sm:text-5xl text-[#2B1810] mt-4 truncate">
-            PKR {completedRevenue.toLocaleString()}
-          </div>
-        </div>
-
-        {/* Metric 3: Live Products */}
-        <div className="bg-[#ECE4D8]/80 border border-[#2B1810]/15 rounded-3xl p-6 shadow-sm flex flex-col justify-between">
-          <div className="flex items-center gap-2 text-xs font-mono-code font-bold tracking-wider text-[#2B1810]/70 uppercase">
-            <UtensilsCrossed className="w-4 h-4 text-[#C46726]" />
-            <span>LIVE PRODUCTS</span>
-          </div>
-          <div className="font-display font-black text-5xl sm:text-6xl text-[#2B1810] mt-4">
-            {liveProductsCount}
-          </div>
-        </div>
-      </div>
-
-      {/* Homepage Spotlight / Hero Image Editor Card matching Screenshot 8 */}
-      <div className="bg-[#ECE4D8]/80 border border-[#2B1810]/15 rounded-3xl p-6 sm:p-7 shadow-sm">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-          <div className="flex items-start gap-4">
-            <div className="w-12 h-12 rounded-2xl bg-[#DE8030] text-white flex items-center justify-center shrink-0 shadow-sm mt-0.5">
-              <ImageIcon className="w-6 h-6 stroke-[2]" />
-            </div>
-            <div>
-              <div className="text-[10px] font-mono-code font-bold tracking-[0.25em] text-[#C46726] uppercase">
-                HOMEPAGE SPOTLIGHT
+      {/* TAB 1: ANALYTICS & INSIGHTS */}
+      {activeTab === 'analytics' && (
+        <div className="space-y-8 animate-in fade-in duration-200">
+          
+          {/* KPI Summary Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* Total Revenue */}
+            <div className="bg-[#ECE4D8] border border-[#2B1810]/15 rounded-3xl p-6 shadow-xs relative overflow-hidden">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#C46726] uppercase">
+                  TOTAL REVENUE
+                </span>
+                <div className="w-8 h-8 rounded-full bg-[#15803D]/10 text-[#15803D] flex items-center justify-center">
+                  <DollarSign className="w-4 h-4" />
+                </div>
               </div>
-              <h2 className="font-display font-black text-2xl sm:text-3xl text-[#2B1810] uppercase tracking-tight">
-                HERO IMAGE
-              </h2>
-              <p className="font-mono-code text-xs text-[#2B1810]/70 mt-1">
-                Change the featured banner customers see at the top of the storefront.
+              <div className="font-display font-black text-3xl sm:text-4xl text-[#2B1810]">
+                PKR {totalRevenue.toLocaleString()}
+              </div>
+              <p className="text-[11px] font-mono-code text-[#2B1810]/60 mt-1">
+                From {completedOrders.length} completed deliveries
+              </p>
+            </div>
+
+            {/* Completed Orders */}
+            <div className="bg-[#ECE4D8] border border-[#2B1810]/15 rounded-3xl p-6 shadow-xs relative overflow-hidden">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#C46726] uppercase">
+                  COMPLETED ORDERS
+                </span>
+                <div className="w-8 h-8 rounded-full bg-[#15803D]/10 text-[#15803D] flex items-center justify-center">
+                  <CheckCircle className="w-4 h-4" />
+                </div>
+              </div>
+              <div className="font-display font-black text-3xl sm:text-4xl text-[#2B1810]">
+                {completedOrders.length}
+              </div>
+              <p className="text-[11px] font-mono-code text-[#2B1810]/60 mt-1">
+                Successfully delivered to customers
+              </p>
+            </div>
+
+            {/* Canceled Orders */}
+            <div className="bg-[#ECE4D8] border border-[#2B1810]/15 rounded-3xl p-6 shadow-xs relative overflow-hidden">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-[10px] font-mono-code font-bold tracking-[0.2em] text-red-600 uppercase">
+                  CANCELED ORDERS
+                </span>
+                <div className="w-8 h-8 rounded-full bg-red-100 text-red-600 flex items-center justify-center">
+                  <XCircle className="w-4 h-4" />
+                </div>
+              </div>
+              <div className="font-display font-black text-3xl sm:text-4xl text-red-700">
+                {cancelledOrders.length}
+              </div>
+              <p className="text-[11px] font-mono-code text-[#2B1810]/60 mt-1">
+                Rejected or voided orders
+              </p>
+            </div>
+
+            {/* Active Queue & AOV */}
+            <div className="bg-[#ECE4D8] border border-[#2B1810]/15 rounded-3xl p-6 shadow-xs relative overflow-hidden">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#C46726] uppercase">
+                  AVG ORDER VALUE
+                </span>
+                <div className="w-8 h-8 rounded-full bg-[#DE8030]/15 text-[#DE8030] flex items-center justify-center">
+                  <ShoppingBag className="w-4 h-4" />
+                </div>
+              </div>
+              <div className="font-display font-black text-3xl sm:text-4xl text-[#2B1810]">
+                PKR {avgOrderValue.toLocaleString()}
+              </div>
+              <p className="text-[11px] font-mono-code text-[#2B1810]/60 mt-1">
+                {openOrders.length} order(s) currently in kitchen
               </p>
             </div>
           </div>
 
-          {/* Current Banner Preview Thumbnail */}
-          <div className="shrink-0 flex items-center gap-3">
-            <div className="w-24 sm:w-32 h-16 sm:h-20 rounded-2xl overflow-hidden border-2 border-[#2B1810]/20 bg-[#E2D8C9] shadow-inner">
-              <img
-                src={heroImage}
-                alt="Banner preview"
-                className="w-full h-full object-cover"
-              />
+          {/* Breakdown & Top Selling Items Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+            
+            {/* Left: Top Selling Items */}
+            <div className="lg:col-span-7 bg-[#ECE4D8] border border-[#2B1810]/15 rounded-3xl p-6 sm:p-7 shadow-xs space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#C46726] uppercase">
+                    PERFORMANCE INSIGHTS
+                  </div>
+                  <h3 className="font-display font-black text-2xl text-[#2B1810] uppercase">
+                    TOP SELLING DISHES
+                  </h3>
+                </div>
+                <span className="text-xs font-mono-code text-[#2B1810]/60">
+                  By units ordered
+                </span>
+              </div>
+
+              {topSellingItems.length === 0 ? (
+                <div className="p-8 text-center text-xs font-mono-code text-[#2B1810]/60 bg-[#ECE4D8]/50 rounded-2xl border border-dashed border-[#2B1810]/15">
+                  Complete orders to generate sales rankings.
+                </div>
+              ) : (
+                <div className="space-y-3 pt-2">
+                  {topSellingItems.map((item, idx) => (
+                    <div
+                      key={item.name}
+                      className="bg-[#F5EFEB] border border-[#2B1810]/10 rounded-2xl p-4 flex items-center justify-between gap-4"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <span className="w-7 h-7 rounded-full bg-[#2B1810] text-[#F5EFEB] font-mono-code font-bold text-xs flex items-center justify-center shrink-0">
+                          #{idx + 1}
+                        </span>
+                        <div className="min-w-0">
+                          <h4 className="font-display font-bold text-base text-[#2B1810] uppercase truncate">
+                            {item.name}
+                          </h4>
+                          <span className="text-xs font-mono-code text-[#2B1810]/60">
+                            {item.quantity} orders delivered
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="text-right shrink-0">
+                        <span className="font-display font-black text-base text-[#2B1810]">
+                          PKR {item.revenue.toLocaleString()}
+                        </span>
+                        <div className="text-[10px] font-mono-code text-[#15803D] font-semibold">
+                          Earned
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
+
+            {/* Right: Order Status Distribution */}
+            <div className="lg:col-span-5 bg-[#ECE4D8] border border-[#2B1810]/15 rounded-3xl p-6 sm:p-7 shadow-xs space-y-4">
+              <div>
+                <div className="text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#C46726] uppercase">
+                  STATUS BREAKDOWN
+                </div>
+                <h3 className="font-display font-black text-2xl text-[#2B1810] uppercase">
+                  ORDER ACTIVITY
+                </h3>
+              </div>
+
+              <div className="space-y-4 pt-2 font-mono-code text-xs">
+                <div>
+                  <div className="flex justify-between font-semibold mb-1">
+                    <span>Delivered & Completed ({completedOrders.length})</span>
+                    <span>
+                      {orders.length > 0
+                        ? Math.round((completedOrders.length / orders.length) * 100)
+                        : 0}
+                      %
+                    </span>
+                  </div>
+                  <div className="w-full h-3 bg-[#2B1810]/10 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-[#15803D] rounded-full"
+                      style={{
+                        width: `${
+                          orders.length > 0 ? (completedOrders.length / orders.length) * 100 : 0
+                        }%`,
+                      }}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex justify-between font-semibold mb-1">
+                    <span>Active in Kitchen ({openOrders.length})</span>
+                    <span>
+                      {orders.length > 0 ? Math.round((openOrders.length / orders.length) * 100) : 0}%
+                    </span>
+                  </div>
+                  <div className="w-full h-3 bg-[#2B1810]/10 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-[#DE8030] rounded-full"
+                      style={{
+                        width: `${
+                          orders.length > 0 ? (openOrders.length / orders.length) * 100 : 0
+                        }%`,
+                      }}
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex justify-between font-semibold mb-1">
+                    <span>Canceled ({cancelledOrders.length})</span>
+                    <span>
+                      {orders.length > 0
+                        ? Math.round((cancelledOrders.length / orders.length) * 100)
+                        : 0}
+                      %
+                    </span>
+                  </div>
+                  <div className="w-full h-3 bg-[#2B1810]/10 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-red-600 rounded-full"
+                      style={{
+                        width: `${
+                          orders.length > 0 ? (cancelledOrders.length / orders.length) * 100 : 0
+                        }%`,
+                      }}
+                    />
+                  </div>
+                </div>
+
+                <div className="pt-4 border-t border-[#2B1810]/10 text-[11px] text-[#2B1810]/70 space-y-1">
+                  <div className="flex justify-between">
+                    <span>Total Orders Recorded:</span>
+                    <span className="font-bold">{orders.length}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Live Cloud Sync:</span>
+                    <span className="font-bold text-[#15803D]">Active (Firestore)</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
           </div>
-        </div>
 
-        {/* Hidden File Input for Banner */}
-        <input
-          type="file"
-          ref={bannerFileInputRef}
-          accept="image/*"
-          className="hidden"
-          onChange={handleBannerFileUpload}
-        />
+          {/* Complete Order History Logs Table */}
+          <div className="bg-[#ECE4D8] border border-[#2B1810]/15 rounded-3xl p-6 sm:p-7 shadow-xs space-y-5">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div>
+                <div className="text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#C46726] uppercase">
+                  HISTORICAL LOGS
+                </div>
+                <h3 className="font-display font-black text-2xl sm:text-3xl text-[#2B1810] uppercase">
+                  COMPLETE ORDER HISTORY
+                </h3>
+              </div>
 
-        {/* Device File Upload & Action Controls */}
-        <div className="mt-5 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-2 border-t border-[#2B1810]/10">
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              onClick={() => bannerFileInputRef.current?.click()}
-              disabled={isBannerProcessing}
-              className="px-6 py-3 rounded-full bg-[#2B1810] text-[#F5EFEB] font-mono-code text-xs uppercase font-bold tracking-wider hover:bg-[#3E241A] active:scale-95 transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
-            >
-              <Upload className="w-4 h-4 text-[#DE8030]" />
-              <span>{isBannerProcessing ? 'PROCESSING FILE...' : 'UPLOAD IMAGE FROM DEVICE'}</span>
-            </button>
+              {/* Filter & Search Bar */}
+              <div className="flex items-center gap-3 flex-wrap">
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={historySearchQuery}
+                    onChange={(e) => setHistorySearchQuery(e.target.value)}
+                    placeholder="Search order ID or customer..."
+                    className="pl-9 pr-3 py-2 rounded-xl bg-[#F5EFEB] border border-[#2B1810]/20 text-xs font-mono-code text-[#2B1810] placeholder:text-[#2B1810]/50 focus:outline-none focus:ring-2 focus:ring-[#DE8030]"
+                  />
+                  <Search className="w-4 h-4 text-[#2B1810]/50 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                </div>
 
-            <button
-              type="button"
-              onClick={handleResetDefaultBanner}
-              className="px-4 py-3 rounded-full bg-[#ECE4D8] border border-[#2B1810]/20 hover:bg-[#E2D8C9] text-[#2B1810] font-mono-code text-xs font-semibold uppercase flex items-center gap-1.5 transition cursor-pointer"
-              title="Revert back to original wooden platter photo"
-            >
-              <RotateCcw className="w-3.5 h-3.5 text-[#C46726]" />
-              <span>Reset to Default</span>
-            </button>
-          </div>
+                <select
+                  value={historyStatusFilter}
+                  onChange={(e) => setHistoryStatusFilter(e.target.value)}
+                  className="px-3 py-2 rounded-xl bg-[#F5EFEB] border border-[#2B1810]/20 text-xs font-mono-code text-[#2B1810] focus:outline-none focus:ring-2 focus:ring-[#DE8030]"
+                >
+                  <option value="ALL">ALL STATUSES</option>
+                  <option value="COMPLETED">COMPLETED</option>
+                  <option value="CANCELLED">CANCELLED</option>
+                  <option value="READY">READY</option>
+                  <option value="PREPARING">PREPARING</option>
+                  <option value="PENDING">PENDING</option>
+                </select>
+              </div>
+            </div>
 
-          {/* Feedback & File Name Status */}
-          <div className="flex items-center gap-2 text-xs font-mono-code">
-            {heroSavedFeedback ? (
-              <span className="text-[#2E7D32] font-bold flex items-center gap-1.5 bg-[#2E7D32]/10 px-3 py-1.5 rounded-full">
-                <Check className="w-4 h-4" />
-                <span>Banner Saved to Storefront!</span>
-              </span>
-            ) : bannerFileName ? (
-              <span className="text-[#2B1810]/70 truncate max-w-xs bg-[#F5EFEB] px-3 py-1.5 rounded-full border border-[#2B1810]/15">
-                📁 {bannerFileName}
-              </span>
+            {/* History Table */}
+            {filteredOrderHistory.length === 0 ? (
+              <div className="py-12 text-center text-xs font-mono-code text-[#2B1810]/60 bg-[#ECE4D8]/50 rounded-2xl border border-dashed border-[#2B1810]/15">
+                No orders match your filter criteria.
+              </div>
             ) : (
-              <span className="text-[11px] text-[#2B1810]/50 italic">
-                Device images save directly to browser storage
-              </span>
+              <div className="overflow-x-auto rounded-2xl border border-[#2B1810]/15 bg-[#F5EFEB]">
+                <table className="w-full text-left font-mono-code text-xs">
+                  <thead className="bg-[#2B1810] text-[#F5EFEB] uppercase text-[10px] tracking-wider">
+                    <tr>
+                      <th className="py-3 px-4">Order ID</th>
+                      <th className="py-3 px-4">Time</th>
+                      <th className="py-3 px-4">Customer</th>
+                      <th className="py-3 px-4">Items Summary</th>
+                      <th className="py-3 px-4">Total</th>
+                      <th className="py-3 px-4">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#2B1810]/10">
+                    {filteredOrderHistory.map((o) => (
+                      <tr key={o.id} className="hover:bg-[#ECE4D8]/50 transition-colors">
+                        <td className="py-3.5 px-4 font-bold text-[#2B1810]">{o.id}</td>
+                        <td className="py-3.5 px-4 text-[#2B1810]/70">{o.createdAt}</td>
+                        <td className="py-3.5 px-4">
+                          <div className="font-semibold text-[#2B1810]">{o.customerName}</div>
+                          <div className="text-[10px] text-[#2B1810]/60">{o.customerPhone}</div>
+                        </td>
+                        <td className="py-3.5 px-4 text-[#2B1810]/80">
+                          {o.items.map((it) => `${it.quantity}x ${it.name}`).join(', ')}
+                        </td>
+                        <td className="py-3.5 px-4 font-bold text-[#2B1810]">
+                          PKR {o.total.toLocaleString()}
+                        </td>
+                        <td className="py-3.5 px-4">
+                          <span
+                            className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                              o.status === 'COMPLETED'
+                                ? 'bg-[#15803D]/15 text-[#15803D]'
+                                : o.status === 'CANCELLED'
+                                ? 'bg-red-100 text-red-700'
+                                : o.status === 'READY'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : o.status === 'PREPARING'
+                                ? 'bg-amber-100 text-amber-800'
+                                : 'bg-[#DE8030]/20 text-[#2B1810]'
+                            }`}
+                          >
+                            {o.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
-        </div>
-      </div>
 
-      {/* Main Split Layout: Kitchen Queue (Left) & Menu Control (Right) matching Screenshot 8 & 9 */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-        
-        {/* Left Column: Kitchen Queue */}
-        <div className="lg:col-span-6 space-y-4">
-          <div className="flex items-center justify-between">
+        </div>
+      )}
+
+      {/* TAB 3: PRODUCTS (Owner Only) */}
+      {activeTab === 'products' && isOwner && (
+        <div className="space-y-8 animate-in fade-in duration-200">
+          
+          {/* Header Controls: Add Button & Search */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
               <div className="text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#C46726] uppercase">
-                KITCHEN QUEUE
+                STOREFRONT CATALOG
               </div>
-              <h3 className="font-display font-black text-3xl sm:text-4xl text-[#2B1810] uppercase tracking-tight">
-                INCOMING ORDERS
-              </h3>
+              <h2 className="font-display font-black text-3xl sm:text-4xl text-[#2B1810] uppercase tracking-tight">
+                MANAGE PRODUCTS
+              </h2>
             </div>
 
-            <div className="flex items-center gap-2">
-              <span className="bg-[#DE8030] text-[#2B1810] font-mono-code font-bold text-xs px-3 py-1 rounded-full uppercase">
-                {openOrders.length} TOTAL
-              </span>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setIsAddProductExpanded(!isAddProductExpanded)}
+                className="px-5 py-2.5 rounded-full bg-[#9C4A2F] hover:bg-[#853C23] text-white text-xs font-mono-code uppercase font-bold tracking-wider transition shadow-md flex items-center gap-2 cursor-pointer"
+              >
+                {isAddProductExpanded ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+                <span>{isAddProductExpanded ? 'CLOSE FORM' : '+ ADD PRODUCT'}</span>
+              </button>
             </div>
           </div>
 
-          {/* Kitchen Orders Display */}
-          {openOrders.length === 0 ? (
-            /* Kitchen is Clear empty state matching Screenshot 8 & 9 */
-            <div className="bg-[#ECE4D8]/60 border border-dashed border-[#2B1810]/20 rounded-3xl p-10 sm:p-14 text-center flex flex-col items-center justify-center min-h-[340px]">
+          {/* Add Product Collapsible Panel */}
+          {isAddProductExpanded && (
+            <div className="bg-[#ECE4D8] border border-[#2B1810]/15 rounded-3xl p-6 sm:p-8 shadow-md animate-in slide-in-from-top-4 duration-200 space-y-6">
+              <div>
+                <div className="text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#C46726] uppercase">
+                  NEW DISH ENTRY
+                </div>
+                <h3 className="font-display font-black text-2xl text-[#2B1810] uppercase">
+                  ADD NEW MENU ITEM TO FIRESTORE
+                </h3>
+              </div>
+
+              {productSuccessMessage && (
+                <div className="p-4 rounded-2xl bg-emerald-100 text-emerald-900 border border-emerald-300 font-mono-code text-xs">
+                  {productSuccessMessage}
+                </div>
+              )}
+
+              {productErrorMessage && (
+                <div className="p-4 rounded-2xl bg-red-100 text-red-900 border border-red-300 font-mono-code text-xs">
+                  {productErrorMessage}
+                </div>
+              )}
+
+              <form onSubmit={handleSaveProduct} className="space-y-5">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                  <div>
+                    <label className="block text-[10px] font-mono-code font-bold uppercase tracking-wider text-[#2B1810]/70 mb-1.5">
+                      PRODUCT NAME *
+                    </label>
+                    <input
+                      type="text"
+                      value={newItemName}
+                      onChange={(e) => setNewItemName(e.target.value)}
+                      placeholder="e.g. Classic Beef Smash Burger"
+                      className="w-full px-4 py-2.5 rounded-xl bg-[#F5EFEB] border border-[#2B1810]/20 text-xs font-mono-code text-[#2B1810] focus:ring-2 focus:ring-[#DE8030] focus:outline-none"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-mono-code font-bold uppercase tracking-wider text-[#2B1810]/70 mb-1.5">
+                      CATEGORY *
+                    </label>
+                    <select
+                      value={newItemCategory}
+                      onChange={(e) => setNewItemCategory(e.target.value)}
+                      className="w-full px-4 py-2.5 rounded-xl bg-[#F5EFEB] border border-[#2B1810]/20 text-xs font-mono-code text-[#2B1810] focus:ring-2 focus:ring-[#DE8030] focus:outline-none"
+                    >
+                      {customCategories.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                  <div>
+                    <label className="block text-[10px] font-mono-code font-bold uppercase tracking-wider text-[#2B1810]/70 mb-1.5">
+                      PRICE (PKR) *
+                    </label>
+                    <input
+                      type="number"
+                      value={newItemPrice}
+                      onChange={(e) => setNewItemPrice(e.target.value)}
+                      placeholder="e.g. 599"
+                      className="w-full px-4 py-2.5 rounded-xl bg-[#F5EFEB] border border-[#2B1810]/20 text-xs font-mono-code text-[#2B1810] focus:ring-2 focus:ring-[#DE8030] focus:outline-none"
+                      required
+                      min="1"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-mono-code font-bold uppercase tracking-wider text-[#2B1810]/70 mb-1.5">
+                      SLASHED / ORIGINAL PRICE (OPTIONAL)
+                    </label>
+                    <input
+                      type="number"
+                      value={newItemOriginalPrice}
+                      onChange={(e) => setNewItemOriginalPrice(e.target.value)}
+                      placeholder="e.g. 799"
+                      className="w-full px-4 py-2.5 rounded-xl bg-[#F5EFEB] border border-[#2B1810]/20 text-xs font-mono-code text-[#2B1810] focus:ring-2 focus:ring-[#DE8030] focus:outline-none"
+                      min="1"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-mono-code font-bold uppercase tracking-wider text-[#2B1810]/70 mb-1.5">
+                    DESCRIPTION
+                  </label>
+                  <textarea
+                    value={newItemDescription}
+                    onChange={(e) => setNewItemDescription(e.target.value)}
+                    placeholder="Crispy fried patty with signature spicy sauce and melted cheese..."
+                    rows={2}
+                    className="w-full px-4 py-2 rounded-xl bg-[#F5EFEB] border border-[#2B1810]/20 text-xs font-mono-code text-[#2B1810] focus:ring-2 focus:ring-[#DE8030] focus:outline-none"
+                  />
+                </div>
+
+                {/* Image Upload Area */}
+                <div>
+                  <label className="block text-[10px] font-mono-code font-bold uppercase tracking-wider text-[#2B1810]/70 mb-1.5">
+                    PRODUCT PHOTO (DEVICE UPLOAD)
+                  </label>
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+                    <input
+                      ref={productFileInputRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={handleProductImageUpload}
+                      className="hidden"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => productFileInputRef.current?.click()}
+                      disabled={isProductImageProcessing}
+                      className="px-4 py-2.5 rounded-xl border border-[#2B1810]/25 bg-[#F5EFEB] hover:bg-[#E2D8C9] text-xs font-mono-code text-[#2B1810] flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      {isProductImageProcessing ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <ImagePlus className="w-4 h-4" />
+                      )}
+                      <span>
+                        {productImageFileName ? 'Change Image' : 'Select Photo From Device'}
+                      </span>
+                    </button>
+
+                    {productImageBase64 && (
+                      <div className="flex items-center gap-3">
+                        <img
+                          src={productImageBase64}
+                          alt="Preview"
+                          className="w-12 h-12 rounded-xl object-cover border border-[#2B1810]/20"
+                        />
+                        <span className="text-xs font-mono-code text-[#15803D] font-bold">
+                          ✓ Image ready for upload
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="pt-2">
+                  <button
+                    type="submit"
+                    disabled={isSubmittingProduct}
+                    className="w-full sm:w-auto px-8 py-3 rounded-full bg-[#15803D] hover:bg-[#166534] text-white text-xs font-mono-code uppercase font-bold tracking-wider transition shadow-md flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                  >
+                    {isSubmittingProduct ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>SAVING DIRECTLY TO FIRESTORE...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-4 h-4" />
+                        <span>PUBLISH PRODUCT TO STOREFRONT</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+
+          {/* Search & Category Filter Bar */}
+          <div className="bg-[#ECE4D8] border border-[#2B1810]/15 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="relative flex-1 max-w-md">
+              <input
+                type="text"
+                value={productSearchQuery}
+                onChange={(e) => setProductSearchQuery(e.target.value)}
+                placeholder="Search products by name or ingredients..."
+                className="w-full pl-9 pr-4 py-2 rounded-xl bg-[#F5EFEB] border border-[#2B1810]/20 text-xs font-mono-code text-[#2B1810] placeholder:text-[#2B1810]/50 focus:outline-none focus:ring-2 focus:ring-[#DE8030]"
+              />
+              <Search className="w-4 h-4 text-[#2B1810]/50 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            </div>
+
+            <div className="flex items-center gap-2 overflow-x-auto scrollbar-none">
+              <button
+                type="button"
+                onClick={() => setProductCategoryFilter('ALL')}
+                className={`px-3.5 py-1.5 rounded-full text-xs font-mono-code uppercase font-semibold transition cursor-pointer whitespace-nowrap ${
+                  productCategoryFilter === 'ALL'
+                    ? 'bg-[#2B1810] text-[#F5EFEB]'
+                    : 'bg-[#F5EFEB] text-[#2B1810]/70 hover:bg-[#E2D8C9]'
+                }`}
+              >
+                ALL ({menuItems.length})
+              </button>
+              {customCategories.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setProductCategoryFilter(c)}
+                  className={`px-3.5 py-1.5 rounded-full text-xs font-mono-code uppercase font-semibold transition cursor-pointer whitespace-nowrap ${
+                    productCategoryFilter === c
+                      ? 'bg-[#2B1810] text-[#F5EFEB]'
+                      : 'bg-[#F5EFEB] text-[#2B1810]/70 hover:bg-[#E2D8C9]'
+                  }`}
+                >
+                  {c}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Product Grid / Table */}
+          {filteredProducts.length === 0 ? (
+            <div className="py-16 text-center text-xs font-mono-code text-[#2B1810]/60 bg-[#ECE4D8]/50 rounded-3xl border border-dashed border-[#2B1810]/15">
+              No products found matching your search.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {filteredProducts.map((item) => (
+                <div
+                  key={item.id}
+                  className="bg-[#ECE4D8] border border-[#2B1810]/15 rounded-3xl p-4 flex flex-col justify-between gap-4 shadow-xs relative"
+                >
+                  <div className="flex items-start gap-3.5">
+                    <img
+                      src={item.image}
+                      alt={item.name}
+                      className="w-16 h-16 rounded-2xl object-cover bg-[#E2D8C9] shrink-0 border border-[#2B1810]/10"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-[10px] font-mono-code font-bold tracking-wider text-[#C46726] uppercase truncate">
+                          {item.category}
+                        </span>
+                        {!item.isAvailable && (
+                          <span className="text-[9px] font-mono-code bg-red-100 text-red-700 px-1.5 py-0.2 rounded font-bold uppercase">
+                            Disabled
+                          </span>
+                        )}
+                      </div>
+                      <h4 className="font-display font-black text-base text-[#2B1810] uppercase truncate leading-tight">
+                        {item.name}
+                      </h4>
+                      <div className="flex items-baseline gap-2 mt-1">
+                        <span className="font-display font-black text-lg text-[#2B1810]">
+                          PKR {item.price.toLocaleString()}
+                        </span>
+                        {item.originalPrice && (
+                          <span className="font-mono-code text-xs line-through text-[#2B1810]/50">
+                            PKR {item.originalPrice.toLocaleString()}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Actions Bar */}
+                  <div className="pt-3 border-t border-[#2B1810]/10 flex items-center justify-between gap-2">
+                    {/* Toggle Available */}
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => onToggleMenuItem(item.id)}
+                        className={`w-11 h-6 rounded-full p-0.5 transition-colors cursor-pointer flex items-center ${
+                          item.isAvailable ? 'bg-[#15803D]' : 'bg-[#BA9D8C]'
+                        }`}
+                        title={item.isAvailable ? 'In Stock (Click to disable)' : 'Sold Out (Click to enable)'}
+                      >
+                        <div
+                          className={`w-5 h-5 rounded-full bg-white shadow-md transform transition-transform ${
+                            item.isAvailable ? 'translate-x-5' : 'translate-x-0'
+                          }`}
+                        />
+                      </button>
+                      <span className="text-[11px] font-mono-code text-[#2B1810]/70">
+                        {item.isAvailable ? 'Live' : 'Hidden'}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      {/* Edit Button */}
+                      <button
+                        type="button"
+                        onClick={() => handleStartEdit(item)}
+                        className="p-2 rounded-xl text-[#2B1810]/70 hover:text-[#2B1810] hover:bg-[#F5EFEB] transition cursor-pointer"
+                        title="Edit dish"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+
+                      {/* Delete Button */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          promptDeleteProduct(item);
+                        }}
+                        disabled={deletingId === item.id}
+                        className="p-2 rounded-xl text-red-600 hover:bg-red-100 transition cursor-pointer disabled:opacity-50"
+                        title={`Delete "${item.name}"`}
+                      >
+                        {deletingId === item.id ? (
+                          <Loader2 className="w-4 h-4 animate-spin text-red-600" />
+                        ) : (
+                          <Trash2 className="w-4 h-4" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+        </div>
+      )}
+
+      {/* TAB 3: ORDERS */}
+      {activeTab === 'orders' && (
+        <div className="space-y-6 animate-in fade-in duration-200">
+          
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <div className="text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#C46726] uppercase">
+                LIVE KITCHEN OPERATIONS
+              </div>
+              <h2 className="font-display font-black text-3xl sm:text-4xl text-[#2B1810] uppercase tracking-tight">
+                INCOMING ORDERS ({openOrders.length})
+              </h2>
+            </div>
+
+            {/* Queue Filter */}
+            <div className="flex items-center gap-2 bg-[#ECE4D8] p-1.5 rounded-2xl border border-[#2B1810]/15">
+              {(['ALL', 'PENDING', 'PREPARING', 'READY'] as const).map((st) => (
+                <button
+                  key={st}
+                  type="button"
+                  onClick={() => setOrderQueueFilter(st)}
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-mono-code font-bold uppercase transition cursor-pointer ${
+                    orderQueueFilter === st
+                      ? 'bg-[#2B1810] text-[#F5EFEB] shadow-xs'
+                      : 'text-[#2B1810]/70 hover:text-[#2B1810]'
+                  }`}
+                >
+                  {st}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Kitchen Orders Grid */}
+          {filteredOpenOrders.length === 0 ? (
+            <div className="bg-[#ECE4D8]/60 border border-dashed border-[#2B1810]/20 rounded-3xl p-12 sm:p-16 text-center flex flex-col items-center justify-center min-h-[340px]">
               <div className="w-14 h-14 rounded-2xl bg-[#DE8030]/15 text-[#DE8030] flex items-center justify-center mb-4">
                 <Sparkles className="w-8 h-8 stroke-[1.8]" />
               </div>
-              <h4 className="font-display font-black text-2xl sm:text-3xl text-[#2B1810] uppercase tracking-tight">
+              <h3 className="font-display font-black text-2xl sm:text-3xl text-[#2B1810] uppercase tracking-tight">
                 KITCHEN IS CLEAR
-              </h4>
+              </h3>
               <p className="font-mono-code text-xs text-[#2B1810]/70 max-w-xs mt-2 leading-relaxed">
-                New orders will appear here in real-time when customers place orders through the live storefront.
+                No active orders in this queue filter. New incoming orders sync here in real time.
               </p>
             </div>
           ) : (
-            <div className="space-y-4">
-              {openOrders.map((order) => {
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              {filteredOpenOrders.map((order) => {
                 const statusColors = {
                   PENDING: 'bg-[#DE8030] text-white',
-                  PREPARING: 'bg-[#1E40AF] text-white',
-                  READY: 'bg-[#B45309] text-white',
+                  PREPARING: 'bg-[#B45309] text-white',
+                  READY: 'bg-[#15803D] text-white',
                   COMPLETED: 'bg-[#15803D] text-white',
                   CANCELLED: 'bg-red-600 text-white',
                 };
@@ -562,81 +1560,83 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
                 return (
                   <div
                     key={order.id}
-                    className="bg-[#ECE4D8] border border-[#2B1810]/20 rounded-3xl p-5 shadow-sm space-y-4 animate-in fade-in"
+                    className="bg-[#F5EFEB] border border-[#2B1810]/15 rounded-3xl p-5 sm:p-6 space-y-4 shadow-sm relative overflow-hidden"
                   >
-                    {/* Header Row */}
-                    <div className="flex items-center justify-between border-b border-[#2B1810]/10 pb-3">
+                    {/* Header */}
+                    <div className="flex items-start justify-between gap-3 border-b border-[#2B1810]/10 pb-3">
                       <div>
-                        <div className="font-display font-black text-xl text-[#2B1810]">
-                          {order.id}
-                        </div>
-                        <div className="text-[11px] font-mono-code text-[#2B1810]/60 flex items-center gap-1.5 mt-0.5">
-                          <Clock className="w-3.5 h-3.5 text-[#C46726]" />
-                          <span>{order.createdAt}</span>
-                        </div>
-                      </div>
-
-                      <span
-                        className={`text-[10px] font-mono-code font-bold uppercase tracking-wider px-3 py-1 rounded-full ${
-                          statusColors[order.status]
-                        }`}
-                      >
-                        {order.status}
-                      </span>
-                    </div>
-
-                    {/* Customer Info */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs font-mono-code text-[#2B1810]/80 bg-[#F5EFEB]/60 p-3 rounded-2xl">
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-[#2B1810]">{order.customerName}</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Phone className="w-3.5 h-3.5 text-[#DE8030]" />
-                        <a href={`tel:${order.customerPhone}`} className="hover:underline">
-                          {order.customerPhone}
-                        </a>
-                      </div>
-                      <div className="sm:col-span-2 flex items-start gap-2 pt-1 border-t border-[#2B1810]/10">
-                        <MapPin className="w-3.5 h-3.5 text-[#DE8030] shrink-0 mt-0.5" />
-                        <span className="truncate">{order.customerAddress}</span>
-                      </div>
-                      {order.notes && (
-                        <div className="sm:col-span-2 text-[11px] italic text-[#C46726] pt-1">
-                          Note: &quot;{order.notes}&quot;
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Order Items */}
-                    <div className="space-y-1.5 font-mono-code text-xs">
-                      {order.items.map((item, idx) => (
-                        <div key={idx} className="flex justify-between py-1 border-b border-[#2B1810]/5">
-                          <span>
-                            <span className="font-bold text-[#2B1810]">{item.quantity}x</span> {item.name}
+                        <div className="flex items-center gap-2">
+                          <span className="font-display font-black text-2xl text-[#2B1810]">
+                            {order.id}
                           </span>
-                          <span className="font-semibold text-[#2B1810]">
-                            PKR {(item.price * item.quantity).toLocaleString()}
+                          <span
+                            className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono-code uppercase font-bold ${
+                              statusColors[order.status]
+                            }`}
+                          >
+                            {order.status}
                           </span>
                         </div>
-                      ))}
-                    </div>
+                        <div className="flex items-center gap-1.5 text-xs font-mono-code text-[#2B1810]/60 mt-0.5">
+                          <Clock className="w-3.5 h-3.5" />
+                          <span>Placed: {order.createdAt}</span>
+                        </div>
+                      </div>
 
-                    {/* Total & Action Buttons */}
-                    <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-[#2B1810]/15">
-                      <div>
+                      <div className="text-right">
                         <span className="text-[10px] font-mono-code text-[#2B1810]/60 uppercase block">
-                          Total (Cash on delivery)
+                          TOTAL BILL
                         </span>
                         <span className="font-display font-black text-2xl text-[#2B1810]">
                           PKR {order.total.toLocaleString()}
                         </span>
                       </div>
+                    </div>
 
+                    {/* Customer Info */}
+                    <div className="bg-[#ECE4D8]/80 rounded-2xl p-3.5 space-y-1 font-mono-code text-xs border border-[#2B1810]/10">
+                      <div className="font-bold text-[#2B1810] flex items-center justify-between">
+                        <span>{order.customerName}</span>
+                        <span className="text-[#9C4A2F] flex items-center gap-1">
+                          <Phone className="w-3 h-3" />
+                          <a href={`tel:${order.customerPhone}`} className="hover:underline">
+                            {order.customerPhone}
+                          </a>
+                        </span>
+                      </div>
+                      <div className="text-[#2B1810]/75 flex items-start gap-1">
+                        <MapPin className="w-3.5 h-3.5 shrink-0 mt-0.5 text-[#DE8030]" />
+                        <span>{order.customerAddress}</span>
+                      </div>
+                      {order.notes && (
+                        <div className="text-[11px] text-[#2B1810]/80 italic pt-1 border-t border-[#2B1810]/10">
+                          &quot;{order.notes}&quot;
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Items List */}
+                    <div className="space-y-1.5 font-mono-code text-xs">
+                      {order.items.map((it, idx) => (
+                        <div key={idx} className="flex justify-between py-1 border-b border-[#2B1810]/5">
+                          <span>
+                            <span className="font-bold text-[#2B1810]">{it.quantity}x</span> {it.name}
+                          </span>
+                          <span className="font-semibold text-[#2B1810]">
+                            PKR {(it.price * it.quantity).toLocaleString()}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Controls */}
+                    <div className="pt-2 flex items-center justify-between gap-3 border-t border-[#2B1810]/15">
                       <div className="flex items-center gap-2 flex-wrap">
                         {order.status === 'PENDING' && (
                           <button
+                            type="button"
                             onClick={() => onUpdateOrderStatus(order.id, 'PREPARING')}
-                            className="px-4 py-2 rounded-full bg-[#2B1810] text-white text-xs font-mono-code uppercase font-semibold flex items-center gap-1.5 hover:bg-[#3E241A] transition"
+                            className="px-4 py-2 rounded-full bg-[#2B1810] text-white text-xs font-mono-code uppercase font-semibold flex items-center gap-1.5 hover:bg-[#3E241A] transition cursor-pointer"
                           >
                             <ChefHat className="w-3.5 h-3.5" />
                             <span>Start Preparing</span>
@@ -645,8 +1645,9 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
 
                         {order.status === 'PREPARING' && (
                           <button
+                            type="button"
                             onClick={() => onUpdateOrderStatus(order.id, 'READY')}
-                            className="px-4 py-2 rounded-full bg-[#B45309] text-white text-xs font-mono-code uppercase font-semibold flex items-center gap-1.5 hover:bg-[#92400E] transition"
+                            className="px-4 py-2 rounded-full bg-[#B45309] text-white text-xs font-mono-code uppercase font-semibold flex items-center gap-1.5 hover:bg-[#92400E] transition cursor-pointer"
                           >
                             <Bell className="w-3.5 h-3.5" />
                             <span>Mark Ready</span>
@@ -655,303 +1656,568 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
 
                         {order.status === 'READY' && (
                           <button
+                            type="button"
                             onClick={() => onUpdateOrderStatus(order.id, 'COMPLETED')}
-                            className="px-4 py-2 rounded-full bg-[#15803D] text-white text-xs font-mono-code uppercase font-semibold flex items-center gap-1.5 hover:bg-[#166534] transition"
+                            className="px-4 py-2 rounded-full bg-[#15803D] text-white text-xs font-mono-code uppercase font-semibold flex items-center gap-1.5 hover:bg-[#166534] transition cursor-pointer"
                           >
                             <CheckCircle className="w-3.5 h-3.5" />
                             <span>Complete & Deliver</span>
                           </button>
                         )}
-
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleCancelOrder(order.id);
-                          }}
-                          className="px-3 py-2 rounded-full text-xs font-mono-code text-red-700 hover:bg-red-100 transition cursor-pointer"
-                          title="Cancel order"
-                        >
-                          Cancel
-                        </button>
                       </div>
+
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          promptCancelOrder(order.id);
+                        }}
+                        className="relative z-20 pointer-events-auto px-3.5 py-2 rounded-full text-xs font-mono-code font-bold text-red-700 hover:bg-red-100 transition cursor-pointer"
+                        title="Cancel order"
+                      >
+                        Cancel
+                      </button>
                     </div>
                   </div>
                 );
               })}
             </div>
           )}
-        </div>
 
-        {/* Right Column: Menu Control & Product List matching Screenshot 8 & 9 */}
-        <div className="lg:col-span-6 space-y-6">
-          <div>
-            <div className="text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#C46726] uppercase">
-              MENU CONTROL
+        </div>
+      )}
+
+      {/* TAB 4: CATEGORIES (Owner Only) */}
+      {activeTab === 'categories' && isOwner && (
+        <div className="space-y-8 animate-in fade-in duration-200">
+          
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <div className="text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#C46726] uppercase">
+                MENU TAXONOMY
+              </div>
+              <h2 className="font-display font-black text-3xl sm:text-4xl text-[#2B1810] uppercase tracking-tight">
+                MANAGE CATEGORIES
+              </h2>
             </div>
-            <h3 className="font-display font-black text-3xl sm:text-4xl text-[#2B1810] uppercase tracking-tight">
-              PRODUCTS
-            </h3>
           </div>
 
-          {/* Add New Product Form matching Screenshot 8 & 9 */}
-          <div className="bg-[#ECE4D8]/80 border border-[#2B1810]/15 rounded-3xl p-6 shadow-sm space-y-4">
-            <div className="text-xs font-mono-code font-bold tracking-wider text-[#C46726] uppercase flex items-center gap-1">
-              <Plus className="w-3.5 h-3.5" />
-              <span>ADD NEW PRODUCT</span>
-            </div>
+          {/* Add Category Form */}
+          <div className="bg-[#ECE4D8] border border-[#2B1810]/15 rounded-3xl p-6 sm:p-7 shadow-xs">
+            <h3 className="font-display font-black text-xl text-[#2B1810] uppercase mb-1">
+              ADD NEW MENU CATEGORY
+            </h3>
+            <p className="font-mono-code text-xs text-[#2B1810]/70 mb-4">
+              Add new categories like DRINKS, DESSERTS, WRAPS to organize your dishes.
+            </p>
 
-            <form onSubmit={handleCreateProduct} className="space-y-3.5">
-              {/* Item Name */}
-              <div>
-                <input
-                  type="text"
-                  required
-                  value={newItemName}
-                  onChange={(e) => setNewItemName(e.target.value)}
-                  placeholder="Item name"
-                  className="w-full px-4 py-3 rounded-2xl bg-[#F5EFEB] border border-[#2B1810]/20 font-mono-code text-xs text-[#2B1810] placeholder:text-[#2B1810]/40 focus:outline-none focus:ring-2 focus:ring-[#DE8030]"
-                />
+            {categorySuccessMsg && (
+              <div className="mb-4 p-3 rounded-xl bg-emerald-100 text-emerald-900 border border-emerald-300 font-mono-code text-xs">
+                {categorySuccessMsg}
               </div>
+            )}
 
-              {/* Category Dropdown, Price in PKR & Optional Slashed Price */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <select
-                  value={newItemCategory}
-                  onChange={(e) => setNewItemCategory(e.target.value as MenuItem['category'])}
-                  className="w-full px-4 py-3 rounded-2xl bg-[#F5EFEB] border border-[#2B1810]/20 font-mono-code text-xs text-[#2B1810] focus:outline-none focus:ring-2 focus:ring-[#DE8030]"
-                >
-                  <option value="BURGERS">Burgers</option>
-                  <option value="PIZZAS">Pizzas</option>
-                  <option value="FAST FOOD">Fast Food</option>
-                  <option value="DEALS">Deals</option>
-                </select>
-
-                <input
-                  type="number"
-                  required
-                  min="50"
-                  step="10"
-                  value={newItemPrice}
-                  onChange={(e) => setNewItemPrice(e.target.value)}
-                  placeholder="Selling Price (PKR)"
-                  className="w-full px-4 py-3 rounded-2xl bg-[#F5EFEB] border border-[#2B1810]/20 font-mono-code text-xs text-[#2B1810] placeholder:text-[#2B1810]/40 focus:outline-none focus:ring-2 focus:ring-[#DE8030]"
-                />
-
-                <input
-                  type="number"
-                  min="50"
-                  step="10"
-                  value={newItemOriginalPrice}
-                  onChange={(e) => setNewItemOriginalPrice(e.target.value)}
-                  placeholder="Slashed Price (opt)"
-                  title="If higher than selling price, original price will appear slashed out"
-                  className="w-full px-4 py-3 rounded-2xl bg-[#F5EFEB] border border-[#2B1810]/20 font-mono-code text-xs text-[#2B1810] placeholder:text-[#2B1810]/40 focus:outline-none focus:ring-2 focus:ring-[#DE8030]"
-                />
-              </div>
-
-              {/* Short Description */}
-              <div>
-                <input
-                  type="text"
-                  required
-                  value={newItemDescription}
-                  onChange={(e) => setNewItemDescription(e.target.value)}
-                  placeholder="Short description"
-                  className="w-full px-4 py-3 rounded-2xl bg-[#F5EFEB] border border-[#2B1810]/20 font-mono-code text-xs text-[#2B1810] placeholder:text-[#2B1810]/40 focus:outline-none focus:ring-2 focus:ring-[#DE8030]"
-                />
-              </div>
-
-              {/* Local Device Image File Upload */}
-              <div>
-                <input
-                  type="file"
-                  ref={productFileInputRef}
-                  accept="image/*"
-                  className="hidden"
-                  onChange={handleProductFileUpload}
-                />
-
-                {!productImageBase64 ? (
-                  <button
-                    type="button"
-                    onClick={() => productFileInputRef.current?.click()}
-                    disabled={isProductImageProcessing}
-                    className="w-full py-3.5 px-4 rounded-2xl bg-[#F5EFEB] border border-dashed border-[#2B1810]/30 hover:border-[#DE8030] text-[#2B1810] font-mono-code text-xs flex items-center justify-center gap-2 transition group cursor-pointer disabled:opacity-50"
-                  >
-                    <Upload className="w-4 h-4 text-[#DE8030] group-hover:-translate-y-0.5 transition-transform" />
-                    <span className="font-bold">
-                      {isProductImageProcessing ? 'Processing image...' : 'Upload Image from Device'}
-                    </span>
-                    <span className="text-[10px] text-[#2B1810]/50 hidden sm:inline">(Local photo)</span>
-                  </button>
-                ) : (
-                  <div className="flex items-center justify-between p-2.5 bg-[#F5EFEB] rounded-2xl border border-[#2B1810]/20 shadow-xs">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <img
-                        src={productImageBase64}
-                        alt="Product upload preview"
-                        className="w-11 h-11 rounded-xl object-cover border border-[#2B1810]/15 shrink-0 bg-[#ECE4D8]"
-                      />
-                      <div className="min-w-0">
-                        <div className="text-[11px] font-mono-code font-bold text-[#2E7D32] flex items-center gap-1">
-                          <CheckCircle className="w-3.5 h-3.5 shrink-0" />
-                          <span>Image loaded from device</span>
-                        </div>
-                        <div className="text-[10px] font-mono-code text-[#2B1810]/60 truncate max-w-[190px]">
-                          {productImageFileName || 'Uploaded local photo'}
-                        </div>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setProductImageBase64('');
-                        setProductImageFileName('');
-                        if (productFileInputRef.current) productFileInputRef.current.value = '';
-                      }}
-                      className="p-1.5 text-[#2B1810]/40 hover:text-red-600 transition cursor-pointer"
-                      title="Remove image"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {/* Feedback Notifications */}
-              {productSuccessMessage && (
-                <div className="flex items-start gap-2.5 p-3.5 bg-emerald-100/90 border border-emerald-300 rounded-2xl text-emerald-800 text-xs font-mono-code animate-in fade-in duration-200">
-                  <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                  <span className="font-semibold leading-relaxed">{productSuccessMessage}</span>
-                </div>
-              )}
-
-              {productErrorMessage && (
-                <div className="flex items-start gap-2.5 p-3.5 bg-red-100/90 border border-red-300 rounded-2xl text-red-800 text-xs font-mono-code animate-in fade-in duration-200">
-                  <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
-                  <span className="font-semibold leading-relaxed">{productErrorMessage}</span>
-                </div>
-              )}
-
-              {/* Submit Button in terracotta matching screenshot */}
+            <form onSubmit={handleAddCategory} className="flex flex-col sm:flex-row items-center gap-3">
+              <input
+                type="text"
+                value={newCategoryName}
+                onChange={(e) => setNewCategoryName(e.target.value)}
+                placeholder="e.g. DESSERTS, DRINKS, SHAKES"
+                className="flex-1 w-full px-4 py-2.5 rounded-xl bg-[#F5EFEB] border border-[#2B1810]/20 text-xs font-mono-code text-[#2B1810] uppercase focus:outline-none focus:ring-2 focus:ring-[#DE8030]"
+                required
+              />
               <button
                 type="submit"
-                disabled={isSubmittingProduct || isProductImageProcessing}
-                className="w-full py-3.5 rounded-full bg-[#9C4A2F] hover:bg-[#853C23] text-white font-mono-code text-xs uppercase font-bold tracking-wider active:scale-95 transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-[#2B1810] hover:bg-[#3E241A] text-[#F5EFEB] text-xs font-mono-code uppercase font-bold tracking-wider transition shadow-md cursor-pointer whitespace-nowrap"
               >
-                {isSubmittingProduct ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin text-white" />
-                    <span>SAVING TO FIRESTORE...</span>
-                  </>
-                ) : productSavedFeedback ? (
-                  <>
-                    <Check className="w-4 h-4 text-emerald-300" />
-                    <span>PRODUCT SAVED TO FIRESTORE!</span>
-                  </>
-                ) : (
-                  <>
-                    <Plus className="w-4 h-4" />
-                    <span>+ ADD TO LIVE MENU</span>
-                  </>
-                )}
+                + Add Category
               </button>
             </form>
           </div>
 
-          {/* Live Product List with Toggles & Delete matching Screenshot 9 */}
-          <div className="space-y-3">
-            <div className="text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#2B1810]/60 uppercase">
-              ACTIVE STOREFRONT MENU ITEMS ({menuItems.length})
-            </div>
+          {/* Category Cards Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+            {customCategories.map((cat) => {
+              const matchingItems = menuItems.filter(
+                (m) => (m.category || '').trim().toUpperCase() === cat.trim().toUpperCase()
+              );
 
-            {menuItems.length === 0 ? (
-              <div className="text-center py-12 px-4 bg-[#ECE4D8]/50 rounded-2xl border border-dashed border-[#2B1810]/20 font-mono-code text-xs text-[#2B1810]/60">
-                <UtensilsCrossed className="w-8 h-8 text-[#2B1810]/30 mx-auto mb-2" />
-                <div className="font-bold text-[#2B1810] uppercase mb-1">Firestore 'products' is empty</div>
-                <p className="text-[11px] text-[#2B1810]/50 max-w-xs mx-auto">
-                  No products found in your database. Use the form on the left to add your first menu item.
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-2.5 max-h-[500px] overflow-y-auto pr-1">
-                {menuItems.map((item) => (
+              return (
                 <div
-                  key={item.id}
-                  className="bg-[#ECE4D8] border border-[#2B1810]/15 rounded-2xl p-3.5 flex items-center justify-between gap-4 shadow-xs"
+                  key={cat}
+                  className="bg-[#ECE4D8] border border-[#2B1810]/15 rounded-3xl p-5 shadow-xs flex flex-col justify-between gap-4"
                 >
-                  {/* Image & Title & Price */}
-                  <div className="flex items-center gap-3 min-w-0">
-                    <img
-                      src={item.image}
-                      alt={item.name}
-                      className="w-12 h-12 rounded-xl object-cover bg-[#E2D8C9] shrink-0"
-                    />
-                    <div className="min-w-0">
-                      <h5 className="font-display font-bold text-sm text-[#2B1810] uppercase truncate leading-tight">
-                        {item.name}
-                      </h5>
-                      <div className="text-[11px] font-mono-code text-[#2B1810]/70 mt-0.5">
-                        PKR {item.price.toLocaleString()} • {item.category}
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-2xl bg-[#DE8030]/20 text-[#DE8030] flex items-center justify-center font-display font-black text-lg">
+                        <Tag className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h4 className="font-display font-black text-xl text-[#2B1810] uppercase">
+                          {cat}
+                        </h4>
+                        <span className="text-xs font-mono-code text-[#2B1810]/70">
+                          {matchingItems.length} active dish(es)
+                        </span>
                       </div>
                     </div>
-                  </div>
 
-                  {/* Actions: Toggle Switch & Delete Trash Icon */}
-                  <div className="flex items-center gap-3 shrink-0">
-                    {/* Toggle Switch matching Screenshot 9 */}
-                    <button
-                      onClick={() => onToggleMenuItem(item.id)}
-                      className={`w-12 h-7 rounded-full p-1 transition-colors cursor-pointer flex items-center ${
-                        item.isAvailable ? 'bg-[#00B074]' : 'bg-[#BA9D8C]'
-                      }`}
-                      title={item.isAvailable ? 'Item is live (click to disable)' : 'Item is disabled (click to enable)'}
-                    >
-                      <div
-                        className={`w-5 h-5 rounded-full bg-white shadow-md transform transition-transform ${
-                          item.isAvailable ? 'translate-x-5' : 'translate-x-0'
-                        }`}
-                      />
-                    </button>
-
-                    {/* Edit icon */}
-                    <button
-                      onClick={() => handleStartEdit(item)}
-                      className="p-1.5 text-[#2B1810]/40 hover:text-[#DE8030] transition cursor-pointer"
-                      title="Edit item"
-                    >
-                      <Pencil className="w-4 h-4" />
-                    </button>
-
-                    {/* Delete icon */}
                     <button
                       type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDeleteProduct(item.id);
-                      }}
-                      disabled={deletingId === item.id}
-                      className="p-1.5 text-[#2B1810]/40 hover:text-red-600 hover:bg-red-50 rounded-lg transition cursor-pointer disabled:opacity-50"
-                      title={`Delete "${item.name}" from Firestore`}
-                      aria-label={`Delete ${item.name}`}
+                      onClick={() => promptDeleteCategory(cat)}
+                      className="p-1.5 text-red-600 hover:bg-red-100 rounded-lg transition cursor-pointer"
+                      title={`Delete "${cat}" category`}
                     >
-                      {deletingId === item.id ? (
-                        <Loader2 className="w-4 h-4 animate-spin text-red-600" />
-                      ) : (
-                        <Trash2 className="w-4 h-4" />
-                      )}
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* Thumbnail Previews */}
+                  <div className="flex items-center gap-2 overflow-hidden py-1">
+                    {matchingItems.slice(0, 4).map((it) => (
+                      <img
+                        key={it.id}
+                        src={it.image}
+                        alt={it.name}
+                        title={it.name}
+                        className="w-11 h-11 rounded-xl object-cover bg-[#E2D8C9] border border-[#2B1810]/10"
+                      />
+                    ))}
+                    {matchingItems.length === 0 && (
+                      <span className="text-[11px] font-mono-code text-[#2B1810]/50 italic">
+                        No dishes added yet
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Footer link to Products */}
+                  <div className="pt-2 border-t border-[#2B1810]/10 flex items-center justify-between">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setProductCategoryFilter(cat);
+                        setActiveTab('products');
+                      }}
+                      className="text-xs font-mono-code text-[#9C4A2F] hover:text-[#853C23] font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      <span>Filter Products</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 </div>
-              ))}
-            </div>
-            )}
+              );
+            })}
           </div>
 
         </div>
+      )}
 
-      </div>
+      {/* TAB 5: SETTINGS */}
+      {activeTab === 'settings' && (
+        <div className="space-y-8 animate-in fade-in duration-200">
+          
+          <div>
+            <div className="text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#C46726] uppercase">
+              STORE MANAGEMENT
+            </div>
+            <h2 className="font-display font-black text-3xl sm:text-4xl text-[#2B1810] uppercase tracking-tight">
+              STORE CONFIGURATIONS
+            </h2>
+          </div>
+
+          {/* 1. Store Open/Closed Status Selector */}
+          <div className="bg-[#ECE4D8] border border-[#2B1810]/15 rounded-3xl p-6 sm:p-7 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <div className="text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#C46726] uppercase">
+                  OPERATING STATE
+                </div>
+                <h3 className="font-display font-black text-2xl text-[#2B1810] uppercase">
+                  STORE OPEN / CLOSED STATUS
+                </h3>
+                <p className="font-mono-code text-xs text-[#2B1810]/70 mt-1">
+                  Click any status card below to immediately update the operating mode across the customer storefront and staff portal.
+                </p>
+              </div>
+
+              {statusFeedbackMsg && (
+                <div className="px-3.5 py-1.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-mono-code font-bold flex items-center gap-1.5 animate-in fade-in self-start sm:self-auto shrink-0 shadow-xs">
+                  <Check className="w-3.5 h-3.5" />
+                  <span>{statusFeedbackMsg}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
+              {/* Accepting */}
+              <div
+                onClick={() => handleSelectStatus('ACCEPTING')}
+                className={`p-5 rounded-2xl border-2 transition-all cursor-pointer flex flex-col justify-between gap-3 ${
+                  storeStatus === 'ACCEPTING'
+                    ? 'border-[#15803D] bg-emerald-50/90 shadow-md ring-2 ring-[#15803D]/25'
+                    : 'border-[#2B1810]/15 bg-[#F5EFEB] opacity-75 hover:opacity-100 hover:border-[#2B1810]/35 hover:bg-emerald-50/30'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="font-display font-black text-lg text-[#15803D] uppercase">
+                      ACCEPTING ORDERS
+                    </span>
+                    {storeStatus === 'ACCEPTING' && (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-mono-code font-bold bg-[#15803D] text-white flex items-center gap-1">
+                        <Check className="w-2.5 h-2.5" />
+                        ACTIVE
+                      </span>
+                    )}
+                  </div>
+                  <span
+                    className={`w-3.5 h-3.5 rounded-full border-2 border-white ${
+                      storeStatus === 'ACCEPTING'
+                        ? 'bg-[#15803D] animate-pulse shadow-sm'
+                        : 'bg-gray-300'
+                    }`}
+                  />
+                </div>
+                <p className="font-mono-code text-[11px] text-[#2B1810]/70 leading-relaxed">
+                  Kitchen running smoothly. Normal delivery time (25-35 min).
+                </p>
+                <div className="pt-2 border-t border-[#2B1810]/10 flex items-center justify-between text-[10px] font-mono-code">
+                  <span className="text-[#2B1810]/60">Delivery: ~25-35 min</span>
+                  <span className="font-bold text-[#15803D]">
+                    {storeStatus === 'ACCEPTING' ? 'Currently Active' : 'Click to Activate'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Busy */}
+              <div
+                onClick={() => handleSelectStatus('BUSY')}
+                className={`p-5 rounded-2xl border-2 transition-all cursor-pointer flex flex-col justify-between gap-3 ${
+                  storeStatus === 'BUSY'
+                    ? 'border-amber-500 bg-amber-50/90 shadow-md ring-2 ring-amber-500/25'
+                    : 'border-[#2B1810]/15 bg-[#F5EFEB] opacity-75 hover:opacity-100 hover:border-[#2B1810]/35 hover:bg-amber-50/30'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="font-display font-black text-lg text-amber-800 uppercase">
+                      KITCHEN BUSY
+                    </span>
+                    {storeStatus === 'BUSY' && (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-mono-code font-bold bg-amber-600 text-white flex items-center gap-1">
+                        <Check className="w-2.5 h-2.5" />
+                        ACTIVE
+                      </span>
+                    )}
+                  </div>
+                  <span
+                    className={`w-3.5 h-3.5 rounded-full border-2 border-white ${
+                      storeStatus === 'BUSY'
+                        ? 'bg-amber-500 animate-pulse shadow-sm'
+                        : 'bg-gray-300'
+                    }`}
+                  />
+                </div>
+                <p className="font-mono-code text-[11px] text-[#2B1810]/70 leading-relaxed">
+                  High volume rush. Notice shown to customers advising 45-60 min wait times.
+                </p>
+                <div className="pt-2 border-t border-[#2B1810]/10 flex items-center justify-between text-[10px] font-mono-code">
+                  <span className="text-[#2B1810]/60">Delivery: ~45-60 min</span>
+                  <span className="font-bold text-amber-700">
+                    {storeStatus === 'BUSY' ? 'Currently Active' : 'Click to Activate'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Paused */}
+              <div
+                onClick={() => handleSelectStatus('PAUSED')}
+                className={`p-5 rounded-2xl border-2 transition-all cursor-pointer flex flex-col justify-between gap-3 ${
+                  storeStatus === 'PAUSED'
+                    ? 'border-red-500 bg-red-50/90 shadow-md ring-2 ring-red-500/25'
+                    : 'border-[#2B1810]/15 bg-[#F5EFEB] opacity-75 hover:opacity-100 hover:border-[#2B1810]/35 hover:bg-red-50/30'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="font-display font-black text-lg text-red-700 uppercase">
+                      ORDERS PAUSED
+                    </span>
+                    {storeStatus === 'PAUSED' && (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-mono-code font-bold bg-red-600 text-white flex items-center gap-1">
+                        <Check className="w-2.5 h-2.5" />
+                        ACTIVE
+                      </span>
+                    )}
+                  </div>
+                  <span
+                    className={`w-3.5 h-3.5 rounded-full border-2 border-white ${
+                      storeStatus === 'PAUSED'
+                        ? 'bg-red-500 animate-pulse shadow-sm'
+                        : 'bg-gray-300'
+                    }`}
+                  />
+                </div>
+                <p className="font-mono-code text-[11px] text-[#2B1810]/70 leading-relaxed">
+                  Kitchen resting, closed, or inventory restock. Ordering is temporarily locked.
+                </p>
+                <div className="pt-2 border-t border-[#2B1810]/10 flex items-center justify-between text-[10px] font-mono-code">
+                  <span className="text-[#2B1810]/60">State: Paused / Closed</span>
+                  <span className="font-bold text-red-700">
+                    {storeStatus === 'PAUSED' ? 'Currently Active' : 'Click to Activate'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* 2. Delivery Management Controls (Dynamic sync across storefront, "The Bag", & checkout) */}
+          <div className="bg-[#ECE4D8] border border-[#2B1810]/15 rounded-3xl p-6 sm:p-7 shadow-xs space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <div className="text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#C46726] uppercase">
+                  DISPATCH & PRICING RULES
+                </div>
+                <h3 className="font-display font-black text-2xl text-[#2B1810] uppercase flex items-center gap-2.5">
+                  <Truck className="w-6 h-6 text-[#DE8030]" />
+                  <span>DELIVERY MANAGEMENT</span>
+                </h3>
+                <p className="font-mono-code text-xs text-[#2B1810]/70 mt-1">
+                  Configure delivery fee, free delivery order threshold, and service area name. Updates sync dynamically with customer storefront cart and checkout.
+                </p>
+              </div>
+
+              {deliverySavedFeedback && (
+                <div className="px-3.5 py-1.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-mono-code font-bold flex items-center gap-1.5 animate-in fade-in self-start sm:self-auto">
+                  <Check className="w-3.5 h-3.5" />
+                  <span>Delivery Settings Saved!</span>
+                </div>
+              )}
+            </div>
+
+            <form onSubmit={handleSaveDeliverySettings} className="space-y-5">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                {/* Standard Delivery Fee */}
+                <div className="space-y-1.5">
+                  <label className="block text-[10px] font-mono-code font-bold uppercase tracking-wider text-[#2B1810]/80">
+                    Standard Delivery Fee (PKR)
+                  </label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-[#2B1810]/50 font-mono-code text-xs font-bold">
+                      Rs
+                    </div>
+                    <input
+                      type="number"
+                      min="0"
+                      step="10"
+                      value={deliveryFeeInput}
+                      onChange={(e) => setDeliveryFeeInput(e.target.value)}
+                      placeholder="e.g. 120"
+                      className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-[#F5EFEB] border border-[#2B1810]/20 text-sm font-mono-code font-semibold text-[#2B1810] focus:ring-2 focus:ring-[#DE8030] focus:outline-none"
+                      required
+                    />
+                  </div>
+                  <span className="text-[10px] font-mono-code text-[#2B1810]/55 block">
+                    Charged when order total is below free delivery threshold
+                  </span>
+                </div>
+
+                {/* Free Delivery Threshold */}
+                <div className="space-y-1.5">
+                  <label className="block text-[10px] font-mono-code font-bold uppercase tracking-wider text-[#2B1810]/80">
+                    Free Delivery Threshold (PKR)
+                  </label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-[#2B1810]/50 font-mono-code text-xs font-bold">
+                      Rs
+                    </div>
+                    <input
+                      type="number"
+                      min="0"
+                      step="50"
+                      value={freeThresholdInput}
+                      onChange={(e) => setFreeThresholdInput(e.target.value)}
+                      placeholder="e.g. 1500"
+                      className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-[#F5EFEB] border border-[#2B1810]/20 text-sm font-mono-code font-semibold text-[#2B1810] focus:ring-2 focus:ring-[#DE8030] focus:outline-none"
+                      required
+                    />
+                  </div>
+                  <span className="text-[10px] font-mono-code text-[#2B1810]/55 block">
+                    Orders at or above this amount receive free delivery
+                  </span>
+                </div>
+
+                {/* Primary Delivery Zone / Area */}
+                <div className="space-y-1.5">
+                  <label className="block text-[10px] font-mono-code font-bold uppercase tracking-wider text-[#2B1810]/80">
+                    Delivery Zone / Area Name
+                  </label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-[#2B1810]/50">
+                      <MapPin className="w-4 h-4 text-[#DE8030]" />
+                    </div>
+                    <input
+                      type="text"
+                      value={deliveryZoneInput}
+                      onChange={(e) => setDeliveryZoneInput(e.target.value)}
+                      placeholder="e.g. Korangi"
+                      className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-[#F5EFEB] border border-[#2B1810]/20 text-sm font-mono-code font-semibold text-[#2B1810] focus:ring-2 focus:ring-[#DE8030] focus:outline-none"
+                      required
+                    />
+                  </div>
+                  <span className="text-[10px] font-mono-code text-[#2B1810]/55 block">
+                    Shown in cart badges, notices, and receipt breakdowns
+                  </span>
+                </div>
+              </div>
+
+              {/* Customer storefront preview pill */}
+              <div className="p-3.5 bg-[#F5EFEB] rounded-2xl border border-[#2B1810]/15 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs font-mono-code">
+                <div className="flex items-center gap-2 text-[#2B1810]/80">
+                  <span className="font-bold text-[#C46726] uppercase">Storefront Notice:</span>
+                  <span>
+                    Orders above <strong className="text-[#2B1810]">PKR {Number(freeThresholdInput || 0).toLocaleString()}</strong> get FREE delivery in <strong className="text-[#2B1810]">{deliveryZoneInput || 'Korangi'}</strong> (otherwise <strong className="text-[#2B1810]">PKR {Number(deliveryFeeInput || 0).toLocaleString()}</strong>).
+                  </span>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex flex-wrap items-center gap-3 pt-1">
+                <button
+                  type="submit"
+                  disabled={isSavingDelivery}
+                  className="px-6 py-2.5 rounded-full bg-[#2B1810] hover:bg-[#3E241A] active:scale-95 text-[#F5EFEB] text-xs font-mono-code uppercase font-bold flex items-center gap-2 transition cursor-pointer shadow-md disabled:opacity-50"
+                >
+                  {isSavingDelivery ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Check className="w-4 h-4" />
+                  )}
+                  <span>Save Delivery Settings</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleResetDeliverySettings}
+                  className="px-4 py-2.5 rounded-full border border-[#2B1810]/20 hover:bg-[#2B1810]/5 text-xs font-mono-code uppercase font-semibold text-[#2B1810] flex items-center gap-1.5 transition cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>Reset to Defaults</span>
+                </button>
+              </div>
+            </form>
+          </div>
+
+          {/* 3. Store Operating Hours & Contacts */}
+          <div className="bg-[#ECE4D8] border border-[#2B1810]/15 rounded-3xl p-6 sm:p-7 shadow-xs space-y-4">
+            <div>
+              <div className="text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#C46726] uppercase">
+                SCHEDULE & CONTACTS
+              </div>
+              <h3 className="font-display font-black text-2xl text-[#2B1810] uppercase">
+                OPERATING HOURS & DELIVERY INFO
+              </h3>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pt-2 font-mono-code text-xs">
+              <div className="bg-[#F5EFEB] p-4 rounded-2xl space-y-2 border border-[#2B1810]/10">
+                <div className="flex items-center gap-2 font-bold text-[#2B1810]">
+                  <Clock className="w-4 h-4 text-[#DE8030]" />
+                  <span>KITCHEN TIMINGS</span>
+                </div>
+                <p className="text-[#2B1810]/80">
+                  Open 7 Days a Week: <strong>12:00 PM – 02:00 AM</strong>
+                </p>
+                <p className="text-[11px] text-[#2B1810]/60">
+                  Late night delivery available across all service sectors.
+                </p>
+              </div>
+
+              <div className="bg-[#F5EFEB] p-4 rounded-2xl space-y-2 border border-[#2B1810]/10">
+                <div className="flex items-center gap-2 font-bold text-[#2B1810]">
+                  <Phone className="w-4 h-4 text-[#DE8030]" />
+                  <span>HOTLINE & WHATSAPP</span>
+                </div>
+                <p className="text-[#2B1810]/80">
+                  Helpline: <strong>+92 300 1234567</strong>
+                </p>
+                <p className="text-[11px] text-[#2B1810]/60">
+                  Orders over PKR {deliverySettings?.freeDeliveryThreshold.toLocaleString() ?? '1,500'} enjoy free doorstep delivery in {deliverySettings?.deliveryZone ?? 'Korangi'}.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* 4. Hero Banner Updates with Local File Upload */}
+          <div className="bg-[#ECE4D8] border border-[#2B1810]/15 rounded-3xl p-6 sm:p-7 shadow-xs space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <div className="text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#C46726] uppercase">
+                  STOREFRONT BRANDING
+                </div>
+                <h3 className="font-display font-black text-2xl text-[#2B1810] uppercase">
+                  HERO BANNER IMAGE
+                </h3>
+              </div>
+
+              {heroSavedFeedback && (
+                <div className="px-3 py-1.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-mono-code font-bold flex items-center gap-1.5 animate-in fade-in">
+                  <Check className="w-3.5 h-3.5" />
+                  <span>Banner Saved!</span>
+                </div>
+              )}
+            </div>
+
+            {/* Live Banner Preview */}
+            <div className="relative aspect-[16/6] rounded-2xl overflow-hidden border border-[#2B1810]/20 bg-[#2B1810]">
+              <img
+                src={heroImage}
+                alt="Store Banner"
+                className="w-full h-full object-cover"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent flex items-end p-4">
+                <span className="text-[11px] font-mono-code text-white/90">
+                  Live storefront banner preview
+                </span>
+              </div>
+            </div>
+
+            {/* Upload Buttons */}
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+              <input
+                ref={bannerFileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={handleBannerFileUpload}
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => bannerFileInputRef.current?.click()}
+                disabled={isBannerProcessing}
+                className="px-5 py-2.5 rounded-full bg-[#2B1810] hover:bg-[#3E241A] text-[#F5EFEB] text-xs font-mono-code uppercase font-semibold flex items-center justify-center gap-2 transition cursor-pointer"
+              >
+                {isBannerProcessing ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Upload className="w-4 h-4" />
+                )}
+                <span>Upload New Banner From Device</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleResetDefaultBanner}
+                className="px-4 py-2.5 rounded-full border border-[#2B1810]/20 hover:bg-[#2B1810]/5 text-xs font-mono-code uppercase font-semibold text-[#2B1810] flex items-center justify-center gap-1.5 transition cursor-pointer"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Reset to Default</span>
+              </button>
+            </div>
+          </div>
+
+        </div>
+      )}
 
       {/* Edit Product Modal */}
       {editingItem && (
@@ -967,7 +2233,7 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
               </h3>
               <button
                 onClick={() => setEditingItem(null)}
-                className="w-8 h-8 rounded-full bg-[#2B1810]/5 hover:bg-[#2B1810]/10 flex items-center justify-center text-[#2B1810]"
+                className="w-8 h-8 rounded-full bg-[#2B1810]/5 hover:bg-[#2B1810]/10 flex items-center justify-center text-[#2B1810] cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -994,13 +2260,14 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
                   </label>
                   <select
                     value={editCategory}
-                    onChange={(e) => setEditCategory(e.target.value as MenuItem['category'])}
+                    onChange={(e) => setEditCategory(e.target.value)}
                     className="w-full px-3 py-2.5 rounded-xl bg-[#ECE4D8] border border-[#2B1810]/20 text-xs font-mono-code text-[#2B1810] focus:ring-2 focus:ring-[#DE8030] focus:outline-none"
                   >
-                    <option value="BURGERS">BURGERS</option>
-                    <option value="PIZZAS">PIZZAS</option>
-                    <option value="FAST FOOD">FAST FOOD</option>
-                    <option value="DEALS">DEALS</option>
+                    {customCategories.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
                   </select>
                 </div>
 
@@ -1062,6 +2329,95 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Custom Glassmorphic Confirmation Modal (Replaces browser window.confirm) */}
+      {confirmModal.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          {/* Glassmorphic dark backdrop */}
+          <div
+            onClick={() => !isConfirmingAction && setConfirmModal((prev) => ({ ...prev, isOpen: false }))}
+            className="fixed inset-0 bg-[#2B1810]/75 backdrop-blur-md transition-all animate-in fade-in duration-200"
+          />
+
+          {/* Modal Container */}
+          <div className="relative w-full max-w-md bg-[#F5EFEB] rounded-3xl p-6 sm:p-7 shadow-2xl border border-[#2B1810]/20 z-10 animate-in zoom-in-95 duration-200 space-y-5">
+            {/* Header with warning icon and title */}
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-center gap-3.5">
+                <div className="w-12 h-12 rounded-2xl bg-red-100 text-red-600 flex items-center justify-center border border-red-200/80 shrink-0">
+                  <AlertCircle className="w-6 h-6 stroke-[2.2]" />
+                </div>
+                <div>
+                  <div className="text-[10px] font-mono-code font-bold tracking-[0.2em] text-red-600 uppercase">
+                    ACTION CONFIRMATION
+                  </div>
+                  <h3 className="font-display font-black text-xl sm:text-2xl text-[#2B1810] uppercase tracking-tight">
+                    {confirmModal.title}
+                  </h3>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => !isConfirmingAction && setConfirmModal((prev) => ({ ...prev, isOpen: false }))}
+                disabled={isConfirmingAction}
+                className="w-8 h-8 rounded-full bg-[#2B1810]/5 hover:bg-[#2B1810]/10 flex items-center justify-center text-[#2B1810] transition cursor-pointer disabled:opacity-50"
+                aria-label="Close modal"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Warning Message */}
+            <p className="font-mono-code text-xs sm:text-sm text-[#2B1810]/80 leading-relaxed">
+              {confirmModal.message}
+            </p>
+
+            {/* Item Identifier Highlight */}
+            {confirmModal.itemName && (
+              <div className="bg-[#ECE4D8] border border-[#2B1810]/15 rounded-xl px-4 py-2.5 text-xs font-mono-code text-[#2B1810] font-semibold flex items-center gap-2.5">
+                <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse shrink-0" />
+                <span className="truncate">{confirmModal.itemName}</span>
+              </div>
+            )}
+
+            {/* Modal Actions */}
+            <div className="flex items-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setConfirmModal((prev) => ({ ...prev, isOpen: false }))}
+                disabled={isConfirmingAction}
+                className="flex-1 py-3 rounded-full border border-[#2B1810]/20 text-xs font-mono-code uppercase font-semibold text-[#2B1810] hover:bg-[#2B1810]/5 transition cursor-pointer disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  setIsConfirmingAction(true);
+                  try {
+                    await confirmModal.onConfirm();
+                  } finally {
+                    setIsConfirmingAction(false);
+                    setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+                  }
+                }}
+                disabled={isConfirmingAction}
+                className="flex-1 py-3 rounded-full bg-red-600 hover:bg-red-700 active:scale-95 text-white text-xs font-mono-code uppercase font-bold tracking-wider transition shadow-md flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+              >
+                {isConfirmingAction ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Processing...</span>
+                  </>
+                ) : (
+                  <span>{confirmModal.confirmButtonText || "Yes, Proceed"}</span>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

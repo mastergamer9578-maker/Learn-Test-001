@@ -1,83 +1,53 @@
-import React, { useState } from 'react';
-import { X, ShoppingBag, Plus, Minus, Trash2, CheckCircle2, ArrowRight } from 'lucide-react';
-import { CartItem } from '../types';
+import React from 'react';
+import { X, ShoppingBag, Plus, Minus, Trash2, ArrowRight } from 'lucide-react';
+import { CartItem, DeliverySettings, StoreStatus } from '../types';
 
 interface CartDrawerProps {
   isOpen: boolean;
   onClose: () => void;
   cart: CartItem[];
+  deliverySettings?: DeliverySettings;
+  storeStatus?: StoreStatus;
   onUpdateQuantity: (itemId: string, newQuantity: number) => void;
   onRemoveItem: (itemId: string) => void;
-  onClearCart: () => void;
-  onCheckout: (orderData: {
-    customerName: string;
-    customerPhone: string;
-    customerAddress: string;
-    notes?: string;
-  }) => string; // returns created order ID
+  onProceedToCheckout: () => void;
 }
 
 export const CartDrawer: React.FC<CartDrawerProps> = ({
   isOpen,
   onClose,
   cart,
+  deliverySettings,
+  storeStatus,
   onUpdateQuantity,
   onRemoveItem,
-  onClearCart,
-  onCheckout,
+  onProceedToCheckout,
 }) => {
-  const [customerName, setCustomerName] = useState('');
-  const [customerPhone, setCustomerPhone] = useState('');
-  const [customerAddress, setCustomerAddress] = useState('');
-  const [orderNotes, setOrderNotes] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [completedOrderId, setCompletedOrderId] = useState<string | null>(null);
-
   if (!isOpen) return null;
 
+  const totalItemCount = cart.reduce((sum, item) => sum + item.quantity, 0);
   const subtotal = cart.reduce(
     (sum, item) => sum + item.item.price * item.quantity,
     0
   );
-  const deliveryFee = subtotal > 1500 ? 0 : subtotal > 0 ? 120 : 0;
+
+  const standardFee = deliverySettings?.standardFee ?? 120;
+  const freeThreshold = deliverySettings?.freeDeliveryThreshold ?? 1500;
+  const zoneName = deliverySettings?.deliveryZone || 'Korangi';
+
+  const deliveryFee = subtotal >= freeThreshold ? 0 : subtotal > 0 ? standardFee : 0;
   const total = subtotal + deliveryFee;
-
-  const handleSubmitOrder = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!customerName.trim() || !customerPhone.trim() || !customerAddress.trim()) {
-      return;
-    }
-
-    setIsSubmitting(true);
-    setTimeout(() => {
-      const orderId = onCheckout({
-        customerName: customerName.trim(),
-        customerPhone: customerPhone.trim(),
-        customerAddress: customerAddress.trim(),
-        notes: orderNotes.trim() || undefined,
-      });
-
-      setCompletedOrderId(orderId);
-      setIsSubmitting(false);
-      onClearCart();
-    }, 600);
-  };
-
-  const handleCloseAndReset = () => {
-    setCompletedOrderId(null);
-    onClose();
-  };
 
   return (
     <div className="fixed inset-0 z-50 overflow-hidden">
       {/* Backdrop */}
       <div
-        onClick={handleCloseAndReset}
-        className="absolute inset-0 bg-[#2B1810]/40 backdrop-blur-sm transition-opacity"
+        onClick={onClose}
+        className="absolute inset-0 bg-[#2B1810]/40 backdrop-blur-sm transition-opacity animate-in fade-in duration-200"
       />
 
       <div className="absolute inset-y-0 right-0 max-w-full flex pl-10">
-        <div className="w-screen max-w-md bg-[#F5EFEB] shadow-2xl flex flex-col justify-between border-l border-[#2B1810]/15">
+        <div className="w-screen max-w-md bg-[#F5EFEB] shadow-2xl flex flex-col justify-between border-l border-[#2B1810]/15 animate-in slide-in-from-right duration-300">
           
           {/* Header */}
           <div className="px-6 py-6 border-b border-[#2B1810]/10 flex items-center justify-between bg-[#ECE4D8]/50">
@@ -86,12 +56,12 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                 YOUR ORDER
               </div>
               <h2 className="font-display font-black text-3xl sm:text-4xl text-[#2B1810] tracking-tight uppercase leading-none mt-1">
-                THE BAG
+                THE BAG {cart.length > 0 && `(${totalItemCount})`}
               </h2>
             </div>
 
             <button
-              onClick={handleCloseAndReset}
+              onClick={onClose}
               className="w-9 h-9 rounded-full bg-[#2B1810]/5 hover:bg-[#2B1810]/10 text-[#2B1810] flex items-center justify-center transition-colors cursor-pointer"
               aria-label="Close bag"
             >
@@ -101,50 +71,8 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
 
           {/* Drawer Body */}
           <div className="flex-1 overflow-y-auto px-6 py-6">
-            {completedOrderId ? (
-              /* Order Completed Success Screen */
-              <div className="h-full flex flex-col items-center justify-center text-center py-8">
-                <div className="w-16 h-16 rounded-full bg-[#2E7D32]/15 text-[#2E7D32] flex items-center justify-center mb-5 animate-bounce">
-                  <CheckCircle2 className="w-10 h-10 stroke-[2.5]" />
-                </div>
-                <div className="text-xs font-mono-code font-bold tracking-[0.2em] text-[#C46726] uppercase mb-1">
-                  ORDER CONFIRMED
-                </div>
-                <h3 className="font-display font-black text-3xl text-[#2B1810] uppercase mb-2">
-                  KITCHEN IS FIRING UP!
-                </h3>
-                <p className="font-mono-code text-xs text-[#2B1810]/75 max-w-xs leading-relaxed mb-6">
-                  Thank you, <span className="font-bold text-[#2B1810]">{customerName}</span>! Your order has been placed into the live kitchen queue.
-                </p>
-
-                <div className="w-full bg-[#ECE4D8] border border-[#2B1810]/15 rounded-2xl p-4 mb-6 font-mono-code text-xs text-left">
-                  <div className="flex justify-between py-1 border-b border-[#2B1810]/10">
-                    <span className="text-[#2B1810]/60">ORDER ID:</span>
-                    <span className="font-bold text-[#2B1810]">{completedOrderId}</span>
-                  </div>
-                  <div className="flex justify-between py-1 border-b border-[#2B1810]/10">
-                    <span className="text-[#2B1810]/60">EST. DELIVERY:</span>
-                    <span className="font-bold text-[#DE8030]">25-35 MINS</span>
-                  </div>
-                  <div className="flex justify-between py-1 border-b border-[#2B1810]/10">
-                    <span className="text-[#2B1810]/60">DELIVER TO:</span>
-                    <span className="font-bold text-[#2B1810] truncate max-w-[180px]">{customerAddress}</span>
-                  </div>
-                  <div className="flex justify-between py-1 pt-2">
-                    <span className="text-[#2B1810]/60">PAYMENT:</span>
-                    <span className="font-bold text-[#2B1810]">CASH ON DELIVERY (PKR {total.toLocaleString()})</span>
-                  </div>
-                </div>
-
-                <button
-                  onClick={handleCloseAndReset}
-                  className="w-full py-3.5 rounded-full bg-[#2B1810] text-[#F5EFEB] font-mono-code text-xs uppercase font-bold tracking-wider hover:bg-[#3E241A] transition shadow-md"
-                >
-                  RETURN TO STOREFRONT
-                </button>
-              </div>
-            ) : cart.length === 0 ? (
-              /* Empty Bag State matching Screenshot 2 */
+            {cart.length === 0 ? (
+              /* Empty Bag State */
               <div className="h-full flex flex-col items-center justify-center text-center py-12">
                 <div className="w-20 h-20 rounded-2xl border-2 border-[#2B1810]/20 flex items-center justify-center text-[#2B1810]/40 mb-6">
                   <ShoppingBag className="w-10 h-10 stroke-[1.5]" />
@@ -156,15 +84,16 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                   Add something delicious from the menu and it will show up here.
                 </p>
                 <button
+                  type="button"
                   onClick={onClose}
-                  className="mt-8 px-6 py-2.5 rounded-full bg-[#2B1810] text-[#F5EFEB] font-mono-code text-xs uppercase font-bold tracking-wider hover:bg-[#3E241A] transition"
+                  className="mt-8 px-6 py-2.5 rounded-full bg-[#2B1810] text-[#F5EFEB] font-mono-code text-xs uppercase font-bold tracking-wider hover:bg-[#3E241A] transition cursor-pointer"
                 >
                   BROWSE MENU
                 </button>
               </div>
             ) : (
-              /* Items in Bag List */
-              <div className="space-y-6">
+              /* Items in Bag List (Clean & Compact) */
+              <div className="space-y-4">
                 <div className="space-y-3">
                   {cart.map((cartItem) => (
                     <div
@@ -174,7 +103,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                       <img
                         src={cartItem.item.image}
                         alt={cartItem.item.name}
-                        className="w-16 h-16 rounded-xl object-cover bg-[#E2D8C9] shrink-0"
+                        className="w-16 h-16 rounded-xl object-cover bg-[#E2D8C9] shrink-0 border border-[#2B1810]/10"
                       />
 
                       <div className="flex-1 min-w-0">
@@ -188,13 +117,15 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                         {/* Quantity Counter */}
                         <div className="flex items-center gap-2 mt-2">
                           <button
+                            type="button"
                             onClick={() =>
                               onUpdateQuantity(
                                 cartItem.item.id,
                                 cartItem.quantity - 1
                               )
                             }
-                            className="w-6 h-6 rounded-full bg-[#2B1810]/10 hover:bg-[#2B1810]/20 flex items-center justify-center text-[#2B1810] transition"
+                            className="w-6 h-6 rounded-full bg-[#2B1810]/10 hover:bg-[#2B1810]/20 flex items-center justify-center text-[#2B1810] transition cursor-pointer"
+                            aria-label="Decrease quantity"
                           >
                             <Minus className="w-3 h-3" />
                           </button>
@@ -204,13 +135,15 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                           </span>
 
                           <button
+                            type="button"
                             onClick={() =>
                               onUpdateQuantity(
                                 cartItem.item.id,
                                 cartItem.quantity + 1
                               )
                             }
-                            className="w-6 h-6 rounded-full bg-[#2B1810]/10 hover:bg-[#2B1810]/20 flex items-center justify-center text-[#2B1810] transition"
+                            className="w-6 h-6 rounded-full bg-[#2B1810]/10 hover:bg-[#2B1810]/20 flex items-center justify-center text-[#2B1810] transition cursor-pointer"
+                            aria-label="Increase quantity"
                           >
                             <Plus className="w-3 h-3" />
                           </button>
@@ -222,9 +155,11 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                       </div>
 
                       <button
+                        type="button"
                         onClick={() => onRemoveItem(cartItem.item.id)}
-                        className="p-1.5 text-[#2B1810]/40 hover:text-[#9C4A2F] transition self-start"
+                        className="p-1.5 text-[#2B1810]/40 hover:text-red-600 transition self-start cursor-pointer"
                         title="Remove item"
+                        aria-label="Remove item"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -233,71 +168,21 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                 </div>
 
                 {/* Free Delivery threshold helper */}
-                {subtotal < 1500 ? (
+                {subtotal < freeThreshold ? (
                   <div className="bg-[#DE8030]/10 border border-[#DE8030]/30 rounded-xl p-3 text-[11px] font-mono-code text-[#2B1810]">
-                    Add <span className="font-bold text-[#C46726]">PKR {(1500 - subtotal).toLocaleString()}</span> more for <span className="font-bold">FREE DELIVERY</span> in Korangi!
+                    Add <span className="font-bold text-[#C46726]">PKR {(freeThreshold - subtotal).toLocaleString()}</span> more for <span className="font-bold">FREE DELIVERY</span> in {zoneName}!
                   </div>
                 ) : (
-                  <div className="bg-[#2E7D32]/10 border border-[#2E7D32]/30 rounded-xl p-3 text-[11px] font-mono-code text-[#2E7D32] font-semibold">
-                    ✓ You have qualified for FREE DELIVERY in Korangi!
+                  <div className="bg-[#15803D]/10 border border-[#15803D]/30 rounded-xl p-3 text-[11px] font-mono-code text-[#15803D] font-semibold">
+                    ✓ You have qualified for FREE DELIVERY in {zoneName}!
                   </div>
                 )}
-
-                {/* Customer Checkout Details Form */}
-                <form id="checkout-form" onSubmit={handleSubmitOrder} className="space-y-3 pt-2">
-                  <div className="text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#C46726] uppercase">
-                    DELIVERY DETAILS (KORANGI, KARACHI)
-                  </div>
-
-                  <div>
-                    <input
-                      type="text"
-                      required
-                      placeholder="Your Name *"
-                      value={customerName}
-                      onChange={(e) => setCustomerName(e.target.value)}
-                      className="w-full px-3.5 py-2 rounded-xl bg-[#ECE4D8] border border-[#2B1810]/20 text-xs font-mono-code text-[#2B1810] placeholder:text-[#2B1810]/50 focus:outline-none focus:ring-1 focus:ring-[#DE8030]"
-                    />
-                  </div>
-
-                  <div>
-                    <input
-                      type="tel"
-                      required
-                      placeholder="Phone (e.g. 0321-1234567) *"
-                      value={customerPhone}
-                      onChange={(e) => setCustomerPhone(e.target.value)}
-                      className="w-full px-3.5 py-2 rounded-xl bg-[#ECE4D8] border border-[#2B1810]/20 text-xs font-mono-code text-[#2B1810] placeholder:text-[#2B1810]/50 focus:outline-none focus:ring-1 focus:ring-[#DE8030]"
-                    />
-                  </div>
-
-                  <div>
-                    <textarea
-                      required
-                      rows={2}
-                      placeholder="Delivery Address (Sector, Street, Landmark in Korangi) *"
-                      value={customerAddress}
-                      onChange={(e) => setCustomerAddress(e.target.value)}
-                      className="w-full px-3.5 py-2 rounded-xl bg-[#ECE4D8] border border-[#2B1810]/20 text-xs font-mono-code text-[#2B1810] placeholder:text-[#2B1810]/50 focus:outline-none focus:ring-1 focus:ring-[#DE8030] resize-none"
-                    />
-                  </div>
-
-                  <div>
-                    <input
-                      type="text"
-                      placeholder="Special Cooking Note (e.g. Extra spicy, no mayo)"
-                      value={orderNotes}
-                      onChange={(e) => setOrderNotes(e.target.value)}
-                      className="w-full px-3.5 py-2 rounded-xl bg-[#ECE4D8] border border-[#2B1810]/20 text-xs font-mono-code text-[#2B1810] placeholder:text-[#2B1810]/50 focus:outline-none focus:ring-1 focus:ring-[#DE8030]"
-                    />
-                  </div>
-                </form>
               </div>
             )}
           </div>
 
-          {/* Drawer Footer with Calculation & Submit */}
-          {!completedOrderId && cart.length > 0 && (
+          {/* Drawer Footer with Subtotal, Delivery & Checkout Action */}
+          {cart.length > 0 && (
             <div className="p-6 bg-[#ECE4D8]/80 border-t border-[#2B1810]/15 space-y-4">
               <div className="space-y-1.5 font-mono-code text-xs">
                 <div className="flex justify-between text-[#2B1810]/75">
@@ -305,8 +190,10 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                   <span>PKR {subtotal.toLocaleString()}</span>
                 </div>
                 <div className="flex justify-between text-[#2B1810]/75">
-                  <span>Delivery Fee (Korangi)</span>
-                  <span>{deliveryFee === 0 ? 'FREE' : `PKR ${deliveryFee}`}</span>
+                  <span>Delivery Fee ({zoneName})</span>
+                  <span className={deliveryFee === 0 ? 'text-[#15803D] font-bold' : ''}>
+                    {deliveryFee === 0 ? 'FREE' : `PKR ${deliveryFee}`}
+                  </span>
                 </div>
                 <div className="flex justify-between font-display font-black text-2xl text-[#2B1810] pt-2 border-t border-[#2B1810]/15">
                   <span>TOTAL</span>
@@ -314,20 +201,30 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                 </div>
               </div>
 
+              {/* Store Status Notices */}
+              {storeStatus === 'PAUSED' && (
+                <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 text-[11px] font-mono-code text-red-700 font-semibold flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-red-500 shrink-0"></span>
+                  <span>Kitchen is currently resting. Online checkout is temporarily paused.</span>
+                </div>
+              )}
+
+              {storeStatus === 'BUSY' && (
+                <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 text-[11px] font-mono-code text-amber-800 font-semibold flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0 animate-pulse"></span>
+                  <span>High kitchen rush! Estimated delivery time is 45–60 minutes.</span>
+                </div>
+              )}
+
+              {/* Proceed to Dedicated Checkout Modal */}
               <button
-                type="submit"
-                form="checkout-form"
-                disabled={isSubmitting}
-                className="w-full py-3.5 rounded-full bg-[#2B1810] text-[#F5EFEB] font-mono-code text-xs uppercase font-bold tracking-wider hover:bg-[#3E241A] active:scale-95 transition shadow-lg flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                type="button"
+                onClick={onProceedToCheckout}
+                disabled={storeStatus === 'PAUSED'}
+                className="w-full py-3.5 rounded-full bg-[#2B1810] text-[#F5EFEB] font-mono-code text-xs uppercase font-bold tracking-wider hover:bg-[#3E241A] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed transition shadow-lg flex items-center justify-center gap-2 cursor-pointer"
               >
-                {isSubmitting ? (
-                  <span>TRANSMITTING ORDER...</span>
-                ) : (
-                  <>
-                    <span>CONFIRM ORDER (CASH ON DELIVERY)</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </>
-                )}
+                <span>{storeStatus === 'PAUSED' ? 'ORDERS TEMPORARILY PAUSED' : 'PROCEED TO CHECKOUT'}</span>
+                {storeStatus !== 'PAUSED' && <ArrowRight className="w-4 h-4" />}
               </button>
             </div>
           )}

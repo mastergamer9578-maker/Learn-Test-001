@@ -1,16 +1,18 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Search, Plus, Check, Loader2, UtensilsCrossed } from 'lucide-react';
 import { MenuItem } from '../types';
 import { ProductDetailModal } from './ProductDetailModal';
 
 interface MenuSectionProps {
   items: MenuItem[];
+  categories?: string[];
   onAddToCart: (item: MenuItem, quantity?: number) => void;
   isLoading?: boolean;
 }
 
 export const MenuSection: React.FC<MenuSectionProps> = ({
   items,
+  categories,
   onAddToCart,
   isLoading = false,
 }) => {
@@ -25,7 +27,14 @@ export const MenuSection: React.FC<MenuSectionProps> = ({
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
 
-  const categories = ['ALL', 'BURGERS', 'PIZZAS', 'FAST FOOD', 'DEALS'];
+  // Dynamically compute all customer-facing categories: 'ALL' + presets + custom categories + live product categories
+  const dynamicCategories = useMemo(() => {
+    const defaultList = ['BURGERS', 'PIZZAS', 'FAST FOOD', 'DEALS', 'DRINKS'];
+    const propCats = (categories || []).map((c) => c.trim().toUpperCase()).filter(Boolean);
+    const itemCats = items.map((i) => (i.category || '').trim().toUpperCase()).filter(Boolean);
+    const allUnique = Array.from(new Set([...defaultList, ...propCats, ...itemCats]));
+    return ['ALL', ...allUnique];
+  }, [categories, items]);
 
   const updateScrollState = useCallback(() => {
     const el = scrollContainerRef.current;
@@ -61,15 +70,25 @@ export const MenuSection: React.FC<MenuSectionProps> = ({
     });
   };
 
-  const filteredItems = items.filter((item) => {
-    const matchesCategory =
-      selectedCategory === 'ALL' || item.category === selectedCategory;
-    const matchesSearch =
-      item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.category.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesCategory && matchesSearch;
-  });
+  // Case-insensitive, whitespace-trimmed robust category and keyword matching
+  const filteredItems = useMemo(() => {
+    const normSelected = selectedCategory.trim().toUpperCase();
+    const query = searchQuery.trim().toLowerCase();
+
+    return items.filter((item) => {
+      const normItemCat = (item.category || '').trim().toUpperCase();
+      const matchesCategory =
+        normSelected === 'ALL' || normItemCat === normSelected;
+
+      const matchesSearch =
+        !query ||
+        item.name.toLowerCase().includes(query) ||
+        item.description.toLowerCase().includes(query) ||
+        normItemCat.toLowerCase().includes(query);
+
+      return matchesCategory && matchesSearch;
+    });
+  }, [items, selectedCategory, searchQuery]);
 
   const handleAdd = (item: MenuItem) => {
     onAddToCart(item);
@@ -136,8 +155,8 @@ export const MenuSection: React.FC<MenuSectionProps> = ({
           onScroll={updateScrollState}
           className="flex items-center gap-2.5 overflow-x-auto pb-3 pt-1 scrollbar-none scroll-smooth touch-pan-x overscroll-x-contain select-none px-1"
         >
-          {categories.map((cat) => {
-            const isActive = selectedCategory === cat;
+          {dynamicCategories.map((cat) => {
+            const isActive = selectedCategory.trim().toUpperCase() === cat.trim().toUpperCase();
             return (
               <button
                 key={cat}
@@ -172,7 +191,7 @@ export const MenuSection: React.FC<MenuSectionProps> = ({
       </div>
 
       {/* Food Cards Grid */}
-      {isLoading ? (
+      {isLoading && items.length === 0 ? (
         <div className="text-center py-24 bg-[#ECE4D8]/30 rounded-3xl border border-dashed border-[#2B1810]/15 flex flex-col items-center justify-center">
           <Loader2 className="w-8 h-8 text-[#DE8030] animate-spin mb-3" />
           <h3 className="font-display font-black text-xl text-[#2B1810] uppercase">
@@ -263,28 +282,6 @@ export const MenuSection: React.FC<MenuSectionProps> = ({
                       </span>
                     </div>
                   )}
-
-                  {/* Prominent Circular "+" Add Button directly on Bottom-Right of Image */}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleAdd(item);
-                    }}
-                    disabled={!item.isAvailable}
-                    className={`absolute bottom-2 right-2 sm:bottom-2.5 sm:right-2.5 w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center transition-all duration-200 shadow-md cursor-pointer z-10 active:scale-90 ${
-                      isJustAdded
-                        ? 'bg-[#2E7D32] text-white scale-110 shadow-lg'
-                        : 'bg-[#2B1810] text-[#F5EFEB] hover:bg-[#DE8030] hover:text-[#2B1810]'
-                    }`}
-                    aria-label={`Quick add ${item.name} to bag`}
-                    title="Quick add to bag"
-                  >
-                    {isJustAdded ? (
-                      <Check className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.5]" />
-                    ) : (
-                      <Plus className="w-4 h-4 sm:w-5 sm:h-5 stroke-[2.5]" />
-                    )}
-                  </button>
                 </div>
 
                 {/* Content Container below image */}
@@ -306,10 +303,10 @@ export const MenuSection: React.FC<MenuSectionProps> = ({
                     </p>
                   </div>
 
-                  {/* Pricing: Price and Original Slashed Price */}
-                  <div className="pt-2 mt-1.5 border-t border-[#2B1810]/10 flex items-baseline justify-between">
-                    <div className="flex items-baseline flex-wrap gap-1.5">
-                      <span className="font-display font-black text-sm sm:text-base md:text-xl text-[#2B1810]">
+                  {/* Pricing & Circular "+" Add Button aligned at bottom */}
+                  <div className="pt-2 mt-2 border-t border-[#2B1810]/10 flex items-center justify-between gap-2">
+                    <div className="flex items-baseline flex-wrap gap-1.5 min-w-0">
+                      <span className="font-display font-black text-sm sm:text-base md:text-xl text-[#2B1810] leading-none">
                         PKR {item.price.toLocaleString()}
                       </span>
                       {hasDiscount && (
@@ -318,6 +315,29 @@ export const MenuSection: React.FC<MenuSectionProps> = ({
                         </span>
                       )}
                     </div>
+
+                    {/* Circular "+" Add Button cleanly positioned at bottom-right */}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleAdd(item);
+                      }}
+                      disabled={!item.isAvailable}
+                      className={`w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center shrink-0 transition-all duration-200 shadow-sm cursor-pointer z-10 active:scale-90 ${
+                        isJustAdded
+                          ? 'bg-[#2E7D32] text-white scale-105 shadow-md'
+                          : 'bg-[#2B1810] text-[#F5EFEB] hover:bg-[#DE8030] hover:text-[#2B1810] hover:shadow-md'
+                      } disabled:opacity-40 disabled:cursor-not-allowed`}
+                      aria-label={`Quick add ${item.name} to bag`}
+                      title={item.isAvailable ? "Quick add to bag" : "Sold out"}
+                    >
+                      {isJustAdded ? (
+                        <Check className="w-4 h-4 sm:w-4.5 sm:h-4.5 stroke-[2.5]" />
+                      ) : (
+                        <Plus className="w-4 h-4 sm:w-4.5 sm:h-4.5 stroke-[2.5]" />
+                      )}
+                    </button>
                   </div>
                 </div>
               </div>
