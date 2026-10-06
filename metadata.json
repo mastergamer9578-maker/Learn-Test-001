@@ -1,6 +1,0 @@
-{
-  "name": "SHAN FAST FOOD",
-  "description": "Shan Fast Food in Korangi, Karachi (Est. 2019). Fresh, fast, full of flavour burgers, pizzas, and comfort food.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
