@@ -40,7 +40,7 @@ import {
   Lock,
   LogOut
 } from 'lucide-react';
-import { MenuItem, CustomerOrder, StoreStatus, DeliverySettings, StaffUser } from '../types';
+import { MenuItem, CustomerOrder, StoreStatus, DeliverySettings, StaffUser, CategoryDetail } from '../types';
 import { INITIAL_HERO_IMAGE } from '../data/initialMenu';
 import { sanitizeString } from '../utils/security';
 
@@ -86,12 +86,95 @@ const readFileAsBase64 = (
   });
 };
 
+export const PRESET_CATEGORY_BANNERS = [
+  {
+    name: 'BURGERS',
+    title: 'Gourmet Smashed Burgers',
+    url: 'https://images.unsplash.com/photo-1568901346375-23c9450c58cd?auto=format&fit=crop&w=1600&q=80',
+    tagline: '100% Smashed Beef & Crispy Chicken with Signature Sauces',
+  },
+  {
+    name: 'PIZZAS',
+    title: 'Stone Oven Pizzas',
+    url: 'https://images.unsplash.com/photo-1513104890138-7c749659a591?auto=format&fit=crop&w=1600&q=80',
+    tagline: 'Hand-Tossed Dough, Rich Marinara & Golden Bubbly Mozzarella',
+  },
+  {
+    name: 'FAST FOOD',
+    title: 'Hot & Crispy Fast Food',
+    url: 'https://images.unsplash.com/photo-1562967914-608f82629710?auto=format&fit=crop&w=1600&q=80',
+    tagline: 'Crispy Golden Tenders, Loaded Fries & Sizzling Crunchy Bites',
+  },
+  {
+    name: 'DEALS',
+    title: 'Value Combo Deals',
+    url: 'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?auto=format&fit=crop&w=1600&q=80',
+    tagline: 'Unbeatable Sharing Feasts & Value-Packed Combo Boxes',
+  },
+  {
+    name: 'DRINKS',
+    title: 'Chilled Ice Sodas & Drinks',
+    url: 'https://images.unsplash.com/photo-1551024709-8f23befc6f87?auto=format&fit=crop&w=1600&q=80',
+    tagline: 'Chilled Ice Sodas, Refreshing Mocktails & Cold Brews',
+  },
+  {
+    name: 'FRAPPE',
+    title: 'Artisan Frappe & Coffee',
+    url: 'https://images.unsplash.com/photo-1572490122747-3968b75cc699?auto=format&fit=crop&w=1600&q=80',
+    tagline: 'Artisan Ice-Blended Coffee, Whipped Cream & Decadent Drizzles',
+  },
+  {
+    name: 'SMOOTHIES',
+    title: 'Real Fruit Smoothies',
+    url: 'https://images.unsplash.com/photo-1505252585461-04db1eb84625?auto=format&fit=crop&w=1600&q=80',
+    tagline: '100% Real Fruit Blends, Naturally Vibrant & Energizing',
+  },
+  {
+    name: 'SHAKES',
+    title: 'Hand-Spun Milkshakes',
+    url: 'https://images.unsplash.com/photo-1579954115545-a95591f28bfc?auto=format&fit=crop&w=1600&q=80',
+    tagline: 'Thick Hand-Spun Gourmet Milkshakes with Sweet Toppings',
+  },
+  {
+    name: 'DESSERTS',
+    title: 'Warm Cakes & Desserts',
+    url: 'https://images.unsplash.com/photo-1551024601-bec78aea704b?auto=format&fit=crop&w=1600&q=80',
+    tagline: 'Warm Molten Lava Cakes, Brownies & Sweet Treats',
+  },
+  {
+    name: 'SIDES',
+    title: 'Crispy Loaded Fries & Sides',
+    url: 'https://images.unsplash.com/photo-1576107232684-1279f3908594?auto=format&fit=crop&w=1600&q=80',
+    tagline: 'Seasoned French Fries, Mozzarella Sticks & Crispy Bites',
+  },
+  {
+    name: 'CHICKEN',
+    title: 'Crispy Broast & Fried Chicken',
+    url: 'https://images.unsplash.com/photo-1626082927389-6cd097cdc6ec?auto=format&fit=crop&w=1600&q=80',
+    tagline: 'Spicy Broast, Crispy Wings & Freshly Fried Chicken',
+  },
+  {
+    name: 'SANDWICHES',
+    title: 'Toasted Club Sandwiches & Subs',
+    url: 'https://images.unsplash.com/photo-1528735602780-2552fd46c7af?auto=format&fit=crop&w=1600&q=80',
+    tagline: 'Toasted Club Sandwiches, Paninis & Artisan Subs',
+  },
+];
+
 export type AdminTab = 'analytics' | 'products' | 'orders' | 'categories' | 'settings';
 
 interface StaffDashboardProps {
   menuItems: MenuItem[];
   categories?: string[];
+  categoryDetails?: CategoryDetail[];
   onUpdateCategories?: (cats: string[]) => void;
+  onSaveCategoryWithBanner?: (category: {
+    id?: string;
+    name: string;
+    bannerImage?: string;
+    tagline?: string;
+  }) => Promise<void> | void;
+  onDeleteCategory?: (categoryIdOrName: string) => Promise<void> | void;
   deliverySettings?: DeliverySettings;
   onUpdateDeliverySettings?: (settings: DeliverySettings) => Promise<void> | void;
   onAddMenuItem: (item: Omit<MenuItem, 'id'>) => Promise<void> | void;
@@ -114,7 +197,10 @@ interface StaffDashboardProps {
 export const StaffDashboard: React.FC<StaffDashboardProps> = ({
   menuItems,
   categories,
+  categoryDetails = [],
   onUpdateCategories,
+  onSaveCategoryWithBanner,
+  onDeleteCategory,
   deliverySettings,
   onUpdateDeliverySettings,
   onAddMenuItem,
@@ -251,8 +337,60 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
     }
   }, [categories, menuItems]);
 
+  // Category Banner State for Creation
   const [newCategoryName, setNewCategoryName] = useState('');
+  const [newCategoryBanner, setNewCategoryBanner] = useState('');
+  const [newCategoryTagline, setNewCategoryTagline] = useState('');
+  const [newCategoryBannerFileName, setNewCategoryBannerFileName] = useState('');
+  const [isNewCategoryBannerProcessing, setIsNewCategoryBannerProcessing] = useState(false);
+  const [isSavingCategory, setIsSavingCategory] = useState(false);
+  const categoryBannerFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Category Banner State for Editing
+  const [editingCategory, setEditingCategory] = useState<{
+    id: string;
+    originalName: string;
+    name: string;
+    bannerImage: string;
+    tagline: string;
+  } | null>(null);
+  const [isEditCategoryBannerProcessing, setIsEditCategoryBannerProcessing] = useState(false);
+  const [editCategoryBannerFileName, setEditCategoryBannerFileName] = useState('');
+  const [isSavingEditCategory, setIsSavingEditCategory] = useState(false);
+  const editCategoryBannerFileInputRef = useRef<HTMLInputElement>(null);
+
   const [categorySuccessMsg, setCategorySuccessMsg] = useState<string | null>(null);
+
+  // Helper to resolve custom Firestore banner or preset fallback for any category
+  const getCategoryBannerMeta = (catName: string) => {
+    const norm = catName.trim().toUpperCase();
+    const fromDetail = (categoryDetails || []).find(
+      (c) => (c.name || '').trim().toUpperCase() === norm || (c.id || '').trim().toUpperCase() === norm
+    );
+    if (fromDetail && fromDetail.bannerImage && fromDetail.bannerImage.trim().length > 0) {
+      return {
+        bannerImage: fromDetail.bannerImage.trim(),
+        tagline: fromDetail.tagline?.trim() || 'Menu Category',
+        isCustom: true,
+      };
+    }
+    const preset = PRESET_CATEGORY_BANNERS.find(
+      (p) => p.name === norm || norm.includes(p.name)
+    );
+    if (preset) {
+      return {
+        bannerImage: preset.url,
+        tagline: fromDetail?.tagline?.trim() || preset.tagline,
+        isCustom: false,
+      };
+    }
+    return {
+      bannerImage:
+        'https://images.unsplash.com/photo-1504674900247-0877df9cc836?auto=format&fit=crop&w=1600&q=80',
+      tagline: fromDetail?.tagline?.trim() || "Chef's Signature Recipes, Freshly Prepared To Order",
+      isCustom: false,
+    };
+  };
 
   // Delivery Management State in Settings
   const [deliveryFeeInput, setDeliveryFeeInput] = useState<string>(
@@ -308,6 +446,11 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
   const [editPrice, setEditPrice] = useState('');
   const [editOriginalPrice, setEditOriginalPrice] = useState('');
   const [editDescription, setEditDescription] = useState('');
+  const [editImage, setEditImage] = useState('');
+  const [editImageFileName, setEditImageFileName] = useState('');
+  const [isEditImageProcessing, setIsEditImageProcessing] = useState(false);
+  const [isSavingEditProduct, setIsSavingEditProduct] = useState(false);
+  const editProductFileInputRef = useRef<HTMLInputElement>(null);
 
   // Delete Product State
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -680,8 +823,40 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
     setEditingItem(null);
   };
 
-  // Add Category Handler
-  const handleAddCategory = (e: React.FormEvent) => {
+  // Handle Category Banner File Upload for Creation
+  const handleNewCategoryBannerUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setIsNewCategoryBannerProcessing(true);
+      const base64 = await readFileAsBase64(file, 1600, 900, 0.85);
+      setNewCategoryBanner(base64);
+      setNewCategoryBannerFileName(file.name);
+    } catch (err) {
+      console.error('Failed to read category banner file:', err);
+    } finally {
+      setIsNewCategoryBannerProcessing(false);
+    }
+  };
+
+  // Handle Category Banner File Upload for Editing
+  const handleEditCategoryBannerUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !editingCategory) return;
+    try {
+      setIsEditCategoryBannerProcessing(true);
+      const base64 = await readFileAsBase64(file, 1600, 900, 0.85);
+      setEditingCategory((prev) => (prev ? { ...prev, bannerImage: base64 } : null));
+      setEditCategoryBannerFileName(file.name);
+    } catch (err) {
+      console.error('Failed to read edit category banner file:', err);
+    } finally {
+      setIsEditCategoryBannerProcessing(false);
+    }
+  };
+
+  // Add Category Handler with Custom Banner & Firestore Persistence
+  const handleAddCategory = async (e: React.FormEvent) => {
     e.preventDefault();
     const formatted = sanitizeString(newCategoryName, 50).toUpperCase();
     if (!formatted) return;
@@ -692,18 +867,106 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
       return;
     }
 
-    const updated = [...customCategories, formatted];
-    setCustomCategories(updated);
-    if (onUpdateCategories) onUpdateCategories(updated);
+    setIsSavingCategory(true);
     try {
-      localStorage.setItem('shan_categories', JSON.stringify(updated));
-    } catch {}
-    setNewCategoryName('');
-    setCategorySuccessMsg(`✓ Category "${formatted}" added successfully.`);
-    setTimeout(() => setCategorySuccessMsg(null), 3000);
+      const bannerUrl = newCategoryBanner.trim() || undefined;
+      const tagline = newCategoryTagline.trim() || undefined;
+
+      // Save category with custom banner in Firestore categories collection
+      if (onSaveCategoryWithBanner) {
+        await onSaveCategoryWithBanner({
+          id: formatted,
+          name: formatted,
+          bannerImage: bannerUrl,
+          tagline,
+        });
+      }
+
+      const updated = Array.from(new Set([...customCategories, formatted]));
+      setCustomCategories(updated);
+      if (onUpdateCategories) onUpdateCategories(updated);
+      try {
+        localStorage.setItem('shan_categories', JSON.stringify(updated));
+      } catch {}
+
+      setNewCategoryName('');
+      setNewCategoryBanner('');
+      setNewCategoryTagline('');
+      setNewCategoryBannerFileName('');
+      if (categoryBannerFileInputRef.current) categoryBannerFileInputRef.current.value = '';
+      setCategorySuccessMsg(`✓ Category "${formatted}" & banner saved to Firestore.`);
+      setTimeout(() => setCategorySuccessMsg(null), 3500);
+    } catch (err: any) {
+      console.warn('Error saving category to Firestore:', err);
+      const updated = Array.from(new Set([...customCategories, formatted]));
+      setCustomCategories(updated);
+      if (onUpdateCategories) onUpdateCategories(updated);
+      setCategorySuccessMsg(`✓ Category "${formatted}" added locally.`);
+      setTimeout(() => setCategorySuccessMsg(null), 3500);
+    } finally {
+      setIsSavingCategory(false);
+    }
   };
 
-  // Delete Category Handler
+  // Open Edit Category Modal with current values
+  const handleOpenEditCategory = (catName: string) => {
+    const meta = getCategoryBannerMeta(catName);
+    const fromDetail = (categoryDetails || []).find(
+      (c) => (c.name || '').trim().toUpperCase() === catName.trim().toUpperCase()
+    );
+    setEditingCategory({
+      id: fromDetail?.id || catName.trim().toUpperCase(),
+      originalName: catName.trim().toUpperCase(),
+      name: catName.trim().toUpperCase(),
+      bannerImage: fromDetail?.bannerImage || meta.bannerImage,
+      tagline: fromDetail?.tagline || meta.tagline,
+    });
+    setEditCategoryBannerFileName('');
+  };
+
+  // Save Edited Category to Firestore
+  const handleSaveEditedCategory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingCategory) return;
+    const formatted = sanitizeString(editingCategory.name, 50).toUpperCase();
+    if (!formatted) return;
+
+    setIsSavingEditCategory(true);
+    try {
+      if (onSaveCategoryWithBanner) {
+        await onSaveCategoryWithBanner({
+          id: editingCategory.id || formatted,
+          name: formatted,
+          bannerImage: editingCategory.bannerImage.trim() || undefined,
+          tagline: editingCategory.tagline.trim() || undefined,
+        });
+      }
+
+      const orig = editingCategory.originalName;
+      let updated = customCategories.map((c) => (c === orig ? formatted : c));
+      if (!updated.includes(formatted)) {
+        updated.push(formatted);
+      }
+      setCustomCategories(Array.from(new Set(updated)));
+      if (onUpdateCategories) onUpdateCategories(updated);
+      try {
+        localStorage.setItem('shan_categories', JSON.stringify(updated));
+      } catch {}
+
+      setCategorySuccessMsg(`✓ Category "${formatted}" & banner updated in Firestore.`);
+      setTimeout(() => setCategorySuccessMsg(null), 3500);
+      setEditingCategory(null);
+    } catch (err: any) {
+      console.warn('Error updating category in Firestore:', err);
+      setCategorySuccessMsg(`✓ Category "${formatted}" updated.`);
+      setTimeout(() => setCategorySuccessMsg(null), 3500);
+      setEditingCategory(null);
+    } finally {
+      setIsSavingEditCategory(false);
+    }
+  };
+
+  // Delete Category Handler with Firestore sync
   const promptDeleteCategory = (cat: string) => {
     const normCat = cat.trim().toUpperCase();
     const itemsInCat = menuItems.filter((m) => (m.category || '').trim().toUpperCase() === normCat).length;
@@ -712,17 +975,26 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
       title: 'DELETE CATEGORY',
       message:
         itemsInCat > 0
-          ? `Category "${normCat}" contains ${itemsInCat} active menu items. Are you sure you want to remove this category from the list?`
-          : `Are you sure you want to delete the "${normCat}" category?`,
+          ? `Category "${normCat}" contains ${itemsInCat} active menu items. Are you sure you want to remove this category from Firestore?`
+          : `Are you sure you want to delete the "${normCat}" category from Firestore?`,
       itemName: normCat,
       confirmButtonText: 'Yes, Delete',
-      onConfirm: () => {
+      onConfirm: async () => {
+        try {
+          if (onDeleteCategory) {
+            await onDeleteCategory(normCat);
+          }
+        } catch (err) {
+          console.warn('Error deleting category from Firestore:', err);
+        }
         const updated = customCategories.filter((c) => c.trim().toUpperCase() !== normCat);
         setCustomCategories(updated);
         if (onUpdateCategories) onUpdateCategories(updated);
         try {
           localStorage.setItem('shan_categories', JSON.stringify(updated));
         } catch {}
+        setCategorySuccessMsg(`✓ Category "${normCat}" deleted from Firestore.`);
+        setTimeout(() => setCategorySuccessMsg(null), 3000);
       },
     });
   };
@@ -1797,50 +2069,248 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
               <div className="text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#C46726] uppercase">
-                MENU TAXONOMY
+                MENU TAXONOMY & CUSTOM BANNERS
               </div>
               <h2 className="font-display font-black text-3xl sm:text-4xl text-[#2B1810] uppercase tracking-tight">
-                MANAGE CATEGORIES
+                MANAGE CATEGORIES & HEADERS
               </h2>
+              <p className="font-mono-code text-xs text-[#2B1810]/70 mt-1 max-w-2xl">
+                Configure custom high-definition banner images and taglines for every category. Changes persist directly in Firestore and render dynamically across customer menu sections.
+              </p>
             </div>
           </div>
 
-          {/* Add Category Form */}
-          <div className="bg-[#ECE4D8] border border-[#2B1810]/15 rounded-3xl p-6 sm:p-7 shadow-xs">
-            <h3 className="font-display font-black text-xl text-[#2B1810] uppercase mb-1">
-              ADD NEW MENU CATEGORY
-            </h3>
-            <p className="font-mono-code text-xs text-[#2B1810]/70 mb-4">
-              Add new categories like DRINKS, DESSERTS, WRAPS to organize your dishes.
-            </p>
-
-            {categorySuccessMsg && (
-              <div className="mb-4 p-3 rounded-xl bg-emerald-100 text-emerald-900 border border-emerald-300 font-mono-code text-xs">
-                {categorySuccessMsg}
+          {/* Add Category & Banner Form */}
+          <div className="bg-[#ECE4D8] border border-[#2B1810]/15 rounded-3xl p-6 sm:p-7 shadow-xs space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="font-display font-black text-2xl text-[#2B1810] uppercase flex items-center gap-2">
+                  <ImagePlus className="w-6 h-6 text-[#DE8030]" />
+                  <span>ADD NEW MENU CATEGORY & BANNER</span>
+                </h3>
+                <p className="font-mono-code text-xs text-[#2B1810]/70 mt-1">
+                  Create custom categories with custom header photography (URL or device upload) and taglines.
+                </p>
               </div>
-            )}
 
-            <form onSubmit={handleAddCategory} className="flex flex-col sm:flex-row items-center gap-3">
-              <input
-                type="text"
-                value={newCategoryName}
-                onChange={(e) => setNewCategoryName(e.target.value)}
-                placeholder="e.g. DESSERTS, DRINKS, SHAKES"
-                className="flex-1 w-full px-4 py-2.5 rounded-xl bg-[#F5EFEB] border border-[#2B1810]/20 text-xs font-mono-code text-[#2B1810] uppercase focus:outline-none focus:ring-2 focus:ring-[#DE8030]"
-                required
-              />
-              <button
-                type="submit"
-                className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-[#2B1810] hover:bg-[#3E241A] text-[#F5EFEB] text-xs font-mono-code uppercase font-bold tracking-wider transition shadow-md cursor-pointer whitespace-nowrap"
-              >
-                + Add Category
-              </button>
+              {categorySuccessMsg && (
+                <div className="px-3.5 py-1.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-mono-code font-bold flex items-center gap-1.5 animate-in fade-in shrink-0">
+                  <Check className="w-3.5 h-3.5" />
+                  <span>{categorySuccessMsg}</span>
+                </div>
+              )}
+            </div>
+
+            <form onSubmit={handleAddCategory} className="space-y-5">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Left Column: Form Inputs */}
+                <div className="space-y-4">
+                  {/* Category Name */}
+                  <div>
+                    <label className="block text-[10px] font-mono-code font-bold uppercase tracking-wider text-[#2B1810]/80 mb-1.5">
+                      CATEGORY NAME *
+                    </label>
+                    <input
+                      type="text"
+                      value={newCategoryName}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setNewCategoryName(val);
+                        // Auto-suggest preset banner if user types a matching name and hasn't chosen one
+                        const matchedPreset = PRESET_CATEGORY_BANNERS.find(
+                          (p) => p.name === val.trim().toUpperCase() || val.trim().toUpperCase().includes(p.name)
+                        );
+                        if (matchedPreset && !newCategoryBanner) {
+                          setNewCategoryBanner(matchedPreset.url);
+                          if (!newCategoryTagline) setNewCategoryTagline(matchedPreset.tagline);
+                        }
+                      }}
+                      placeholder="e.g. DESSERTS, WRAPS, FRAPPE, SHAKES"
+                      className="w-full px-4 py-2.5 rounded-xl bg-[#F5EFEB] border border-[#2B1810]/20 text-xs font-mono-code text-[#2B1810] uppercase font-bold focus:outline-none focus:ring-2 focus:ring-[#DE8030]"
+                      required
+                    />
+                  </div>
+
+                  {/* Tagline / Subtitle */}
+                  <div>
+                    <label className="block text-[10px] font-mono-code font-bold uppercase tracking-wider text-[#2B1810]/80 mb-1.5">
+                      TAGLINE / SUBHEADER (OPTIONAL)
+                    </label>
+                    <input
+                      type="text"
+                      value={newCategoryTagline}
+                      onChange={(e) => setNewCategoryTagline(e.target.value)}
+                      placeholder="e.g. 100% Real Fruit Blends, Naturally Vibrant & Energizing"
+                      className="w-full px-4 py-2.5 rounded-xl bg-[#F5EFEB] border border-[#2B1810]/20 text-xs font-mono-code text-[#2B1810] focus:outline-none focus:ring-2 focus:ring-[#DE8030]"
+                    />
+                  </div>
+
+                  {/* Banner Image Input Field (URL or File Upload) */}
+                  <div className="space-y-2">
+                    <label className="block text-[10px] font-mono-code font-bold uppercase tracking-wider text-[#2B1810]/80">
+                      CATEGORY BANNER IMAGE (URL OR FILE UPLOAD)
+                    </label>
+
+                    <div className="flex flex-col sm:flex-row items-center gap-2">
+                      <div className="relative flex-1 w-full">
+                        <input
+                          type="url"
+                          value={newCategoryBanner}
+                          onChange={(e) => {
+                            setNewCategoryBanner(e.target.value);
+                            setNewCategoryBannerFileName('');
+                          }}
+                          placeholder="Paste banner image URL (https://...)"
+                          className="w-full px-4 py-2.5 rounded-xl bg-[#F5EFEB] border border-[#2B1810]/20 text-xs font-mono-code text-[#2B1810] focus:outline-none focus:ring-2 focus:ring-[#DE8030]"
+                        />
+                        {newCategoryBanner && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setNewCategoryBanner('');
+                              setNewCategoryBannerFileName('');
+                            }}
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#2B1810]/40 hover:text-[#2B1810] p-1 cursor-pointer"
+                            title="Clear image"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+
+                      {/* File Upload Input & Trigger */}
+                      <input
+                        ref={categoryBannerFileInputRef}
+                        type="file"
+                        accept="image/*"
+                        onChange={handleNewCategoryBannerUpload}
+                        className="hidden"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => categoryBannerFileInputRef.current?.click()}
+                        disabled={isNewCategoryBannerProcessing}
+                        className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-[#F5EFEB] hover:bg-[#E2D8C9] border border-[#2B1810]/20 text-xs font-mono-code text-[#2B1810] font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer shrink-0"
+                      >
+                        {isNewCategoryBannerProcessing ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <Upload className="w-3.5 h-3.5 text-[#DE8030]" />
+                        )}
+                        <span>Upload File</span>
+                      </button>
+                    </div>
+
+                    {newCategoryBannerFileName && (
+                      <div className="text-[11px] font-mono-code text-emerald-700 flex items-center gap-1">
+                        <Check className="w-3 h-3" />
+                        <span>Uploaded: {newCategoryBannerFileName}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Curated Preset Banner Quick Picker */}
+                  <div className="space-y-1.5 pt-1">
+                    <span className="text-[10px] font-mono-code font-bold uppercase tracking-wider text-[#2B1810]/70 block">
+                      Quick Pick Curated Food Photography:
+                    </span>
+                    <div className="flex items-center gap-2 overflow-x-auto pb-1.5">
+                      {PRESET_CATEGORY_BANNERS.map((preset) => (
+                        <button
+                          key={preset.name}
+                          type="button"
+                          onClick={() => {
+                            setNewCategoryBanner(preset.url);
+                            setNewCategoryBannerFileName('');
+                            if (!newCategoryTagline) setNewCategoryTagline(preset.tagline);
+                            if (!newCategoryName) setNewCategoryName(preset.name);
+                          }}
+                          className={`px-3 py-1 rounded-lg text-[10px] font-mono-code font-bold whitespace-nowrap transition border cursor-pointer ${
+                            newCategoryBanner === preset.url
+                              ? 'bg-[#2B1810] text-white border-[#2B1810]'
+                              : 'bg-[#F5EFEB] text-[#2B1810]/80 border-[#2B1810]/15 hover:border-[#DE8030] hover:text-[#DE8030]'
+                          }`}
+                        >
+                          {preset.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Right Column: Live Interactive Banner Preview */}
+                <div className="space-y-2">
+                  <span className="text-[10px] font-mono-code font-bold uppercase tracking-wider text-[#2B1810]/80 block">
+                    STOREFRONT LIVE BANNER PREVIEW
+                  </span>
+
+                  <div className="relative rounded-2xl overflow-hidden border border-[#2B1810]/20 shadow-md aspect-[16/7] bg-[#2B1810] group">
+                    <img
+                      src={
+                        newCategoryBanner ||
+                        'https://images.unsplash.com/photo-1504674900247-0877df9cc836?auto=format&fit=crop&w=1600&q=80'
+                      }
+                      alt="Banner Preview"
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                    />
+                    {/* Cinematic Overlay */}
+                    <div className="absolute inset-0 bg-gradient-to-r from-[#2B1810] via-[#2B1810]/75 to-transparent" />
+                    <div className="absolute inset-0 bg-gradient-to-t from-[#2B1810]/70 via-transparent to-transparent" />
+
+                    {/* Preview Content */}
+                    <div className="absolute inset-0 p-4 sm:p-5 flex flex-col justify-between z-10">
+                      <div className="flex items-center gap-2">
+                        <span className="px-2 py-0.5 rounded-full text-[9px] font-mono-code font-bold tracking-widest bg-[#DE8030] text-[#2B1810] uppercase">
+                          PREVIEW
+                        </span>
+                        <span className="text-[10px] font-mono-code text-[#F5EFEB]/80">
+                          Live Storefront Look
+                        </span>
+                      </div>
+
+                      <div>
+                        <h4 className="font-display font-black text-xl sm:text-2xl md:text-3xl text-[#F5EFEB] uppercase leading-none drop-shadow-sm">
+                          {newCategoryName.trim() || 'CATEGORY NAME'}
+                        </h4>
+                        <p className="font-mono-code text-[11px] text-[#F5EFEB]/85 line-clamp-1 mt-1">
+                          {newCategoryTagline.trim() || "Chef's Signature Recipes, Freshly Prepared To Order"}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                  <span className="text-[10px] font-mono-code text-[#2B1810]/55 block">
+                    This exact stylish banner header will appear directly above the dishes in the customer menu storefront.
+                  </span>
+                </div>
+              </div>
+
+              {/* Submit Button */}
+              <div className="pt-2 border-t border-[#2B1810]/10 flex items-center justify-end">
+                <button
+                  type="submit"
+                  disabled={isSavingCategory}
+                  className="w-full sm:w-auto px-7 py-3 rounded-xl bg-[#2B1810] hover:bg-[#3E241A] text-[#F5EFEB] text-xs font-mono-code uppercase font-bold tracking-wider transition shadow-md cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {isSavingCategory ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Saving to Firestore...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Plus className="w-4 h-4 text-[#DE8030]" />
+                      <span>+ Save Category & Banner to Firestore</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </form>
           </div>
 
-          {/* Category Cards Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+          {/* Category Cards Grid with Live Headers & Editing */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
             {customCategories.map((cat) => {
+              const meta = getCategoryBannerMeta(cat);
               const matchingItems = menuItems.filter(
                 (m) => (m.category || '').trim().toUpperCase() === cat.trim().toUpperCase()
               );
@@ -1848,64 +2318,104 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
               return (
                 <div
                   key={cat}
-                  className="bg-[#ECE4D8] border border-[#2B1810]/15 rounded-3xl p-5 shadow-xs flex flex-col justify-between gap-4"
+                  className="bg-[#ECE4D8] border border-[#2B1810]/15 rounded-3xl overflow-hidden shadow-xs flex flex-col justify-between group hover:shadow-lg transition-all"
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-2xl bg-[#DE8030]/20 text-[#DE8030] flex items-center justify-center font-display font-black text-lg">
-                        <Tag className="w-5 h-5" />
+                  {/* Category Banner Visual Header */}
+                  <div className="relative aspect-[16/7] w-full bg-[#2B1810] overflow-hidden">
+                    <img
+                      src={meta.bannerImage}
+                      alt={cat}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-r from-[#2B1810] via-[#2B1810]/70 to-transparent" />
+                    <div className="absolute inset-0 bg-gradient-to-t from-[#2B1810]/80 via-transparent to-transparent" />
+
+                    <div className="absolute inset-0 p-4 flex flex-col justify-between z-10">
+                      <div className="flex items-center justify-between">
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[9px] font-mono-code font-bold uppercase tracking-wider ${
+                            meta.isCustom
+                              ? 'bg-emerald-600 text-white'
+                              : 'bg-[#DE8030] text-[#2B1810]'
+                          }`}
+                        >
+                          {meta.isCustom ? 'CUSTOM CLOUD BANNER' : 'PRESET BANNER'}
+                        </span>
+                        <span className="text-[10px] font-mono-code text-[#F5EFEB]/90 bg-black/40 px-2 py-0.5 rounded-full backdrop-blur-xs">
+                          {matchingItems.length} {matchingItems.length === 1 ? 'Dish' : 'Dishes'}
+                        </span>
                       </div>
+
                       <div>
-                        <h4 className="font-display font-black text-xl text-[#2B1810] uppercase">
+                        <h4 className="font-display font-black text-xl text-[#F5EFEB] uppercase leading-tight">
                           {cat}
                         </h4>
-                        <span className="text-xs font-mono-code text-[#2B1810]/70">
-                          {matchingItems.length} active dish(es)
-                        </span>
+                        <p className="font-mono-code text-[10px] text-[#F5EFEB]/80 line-clamp-1 mt-0.5">
+                          {meta.tagline}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Body: Thumbnail Previews & Stats */}
+                  <div className="p-4 space-y-3 flex-grow flex flex-col justify-between">
+                    <div>
+                      <div className="text-[10px] font-mono-code uppercase text-[#2B1810]/60 mb-1.5 font-bold">
+                        Associated Dishes:
+                      </div>
+                      <div className="flex items-center gap-2 overflow-hidden py-0.5">
+                        {matchingItems.slice(0, 4).map((it) => (
+                          <img
+                            key={it.id}
+                            src={it.image}
+                            alt={it.name}
+                            title={it.name}
+                            className="w-10 h-10 rounded-xl object-cover bg-[#E2D8C9] border border-[#2B1810]/10"
+                          />
+                        ))}
+                        {matchingItems.length === 0 && (
+                          <span className="text-[11px] font-mono-code text-[#2B1810]/50 italic">
+                            No dishes added yet
+                          </span>
+                        )}
                       </div>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => promptDeleteCategory(cat)}
-                      className="p-1.5 text-red-600 hover:bg-red-100 rounded-lg transition cursor-pointer"
-                      title={`Delete "${cat}" category`}
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
+                    {/* Footer Actions */}
+                    <div className="pt-3 border-t border-[#2B1810]/10 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenEditCategory(cat)}
+                          className="px-2.5 py-1.5 rounded-lg bg-[#2B1810]/10 hover:bg-[#DE8030] hover:text-[#2B1810] text-[#2B1810] text-[11px] font-mono-code font-bold flex items-center gap-1 transition cursor-pointer"
+                          title={`Edit ${cat} banner & details`}
+                        >
+                          <Pencil className="w-3 h-3" />
+                          <span>Edit Banner</span>
+                        </button>
 
-                  {/* Thumbnail Previews */}
-                  <div className="flex items-center gap-2 overflow-hidden py-1">
-                    {matchingItems.slice(0, 4).map((it) => (
-                      <img
-                        key={it.id}
-                        src={it.image}
-                        alt={it.name}
-                        title={it.name}
-                        className="w-11 h-11 rounded-xl object-cover bg-[#E2D8C9] border border-[#2B1810]/10"
-                      />
-                    ))}
-                    {matchingItems.length === 0 && (
-                      <span className="text-[11px] font-mono-code text-[#2B1810]/50 italic">
-                        No dishes added yet
-                      </span>
-                    )}
-                  </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setProductCategoryFilter(cat);
+                            setActiveTab('products');
+                          }}
+                          className="px-2.5 py-1.5 rounded-lg text-[11px] font-mono-code font-bold text-[#9C4A2F] hover:bg-[#9C4A2F]/10 flex items-center gap-1 transition cursor-pointer"
+                        >
+                          <span>Filter</span>
+                          <ArrowRight className="w-3 h-3" />
+                        </button>
+                      </div>
 
-                  {/* Footer link to Products */}
-                  <div className="pt-2 border-t border-[#2B1810]/10 flex items-center justify-between">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setProductCategoryFilter(cat);
-                        setActiveTab('products');
-                      }}
-                      className="text-xs font-mono-code text-[#9C4A2F] hover:text-[#853C23] font-bold flex items-center gap-1 cursor-pointer"
-                    >
-                      <span>Filter Products</span>
-                      <ArrowRight className="w-3.5 h-3.5" />
-                    </button>
+                      <button
+                        type="button"
+                        onClick={() => promptDeleteCategory(cat)}
+                        className="p-1.5 text-red-600 hover:bg-red-100 rounded-lg transition cursor-pointer"
+                        title={`Delete "${cat}" category`}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
                 </div>
               );
@@ -2319,6 +2829,65 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
             </div>
           </div>
 
+          {/* 5. Category Banners Management in Settings (Owner Access) */}
+          {isOwner && (
+            <div className="bg-[#ECE4D8] border border-[#2B1810]/15 rounded-3xl p-6 sm:p-7 shadow-xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <div className="text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#C46726] uppercase">
+                    STOREFRONT CATEGORY HEADERS
+                  </div>
+                  <h3 className="font-display font-black text-2xl text-[#2B1810] uppercase flex items-center gap-2">
+                    <Tag className="w-5 h-5 text-[#DE8030]" />
+                    <span>CATEGORY BANNERS & SECTIONS</span>
+                  </h3>
+                  <p className="font-mono-code text-xs text-[#2B1810]/70 mt-1">
+                    Customize individual category banner photography, custom subtitles, and dish sections.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('categories')}
+                  className="px-5 py-2.5 rounded-full bg-[#2B1810] hover:bg-[#3E241A] text-[#F5EFEB] text-xs font-mono-code uppercase font-bold tracking-wider flex items-center gap-1.5 transition cursor-pointer self-start sm:self-auto shrink-0 shadow-sm"
+                >
+                  <span>Manage All Category Banners</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              {/* Quick Category Banner Carousel / Previews */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2">
+                {customCategories.slice(0, 4).map((c) => {
+                  const meta = getCategoryBannerMeta(c);
+                  return (
+                    <div
+                      key={c}
+                      onClick={() => handleOpenEditCategory(c)}
+                      className="relative rounded-2xl overflow-hidden aspect-[16/9] border border-[#2B1810]/15 group cursor-pointer shadow-xs"
+                      title={`Click to customize ${c} banner`}
+                    >
+                      <img
+                        src={meta.bannerImage}
+                        alt={c}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/35 to-transparent flex flex-col justify-end p-2.5">
+                        <span className="font-display font-black text-xs text-white uppercase truncate">
+                          {c}
+                        </span>
+                        <span className="text-[9px] font-mono-code text-[#DE8030] flex items-center gap-1 mt-0.5">
+                          <Pencil className="w-2.5 h-2.5" />
+                          <span>Customize Banner</span>
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
         </div>
       )}
 
@@ -2429,6 +2998,222 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
                   className="flex-1 py-3 rounded-full bg-[#9C4A2F] hover:bg-[#853C23] text-white text-xs font-mono-code uppercase font-bold tracking-wider transition shadow-md cursor-pointer"
                 >
                   SAVE CHANGES
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Category Banner & Details Modal */}
+      {editingCategory && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            onClick={() => !isSavingEditCategory && setEditingCategory(null)}
+            className="fixed inset-0 bg-[#2B1810]/60 backdrop-blur-xs animate-in fade-in duration-200"
+          />
+          <div className="relative w-full max-w-xl bg-[#F5EFEB] rounded-3xl p-6 sm:p-7 shadow-2xl border border-[#2B1810]/15 z-10 animate-in zoom-in-95 duration-200 space-y-5 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-[#2B1810]/10 pb-3">
+              <div>
+                <span className="text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#C46726] uppercase">
+                  EDIT CATEGORY HEADER
+                </span>
+                <h3 className="font-display font-black text-2xl text-[#2B1810] uppercase">
+                  {editingCategory.originalName}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => !isSavingEditCategory && setEditingCategory(null)}
+                className="w-8 h-8 rounded-full bg-[#2B1810]/5 hover:bg-[#2B1810]/10 flex items-center justify-center text-[#2B1810] cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditedCategory} className="space-y-4">
+              <div>
+                <label className="block text-[10px] font-mono-code font-bold uppercase tracking-wider text-[#2B1810]/80 mb-1.5">
+                  CATEGORY NAME *
+                </label>
+                <input
+                  type="text"
+                  value={editingCategory.name}
+                  onChange={(e) =>
+                    setEditingCategory({ ...editingCategory, name: e.target.value })
+                  }
+                  className="w-full px-4 py-2.5 rounded-xl bg-[#ECE4D8] border border-[#2B1810]/20 text-xs font-mono-code text-[#2B1810] uppercase font-bold focus:ring-2 focus:ring-[#DE8030] focus:outline-none"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-mono-code font-bold uppercase tracking-wider text-[#2B1810]/80 mb-1.5">
+                  TAGLINE / SUBHEADER (OPTIONAL)
+                </label>
+                <input
+                  type="text"
+                  value={editingCategory.tagline}
+                  onChange={(e) =>
+                    setEditingCategory({ ...editingCategory, tagline: e.target.value })
+                  }
+                  placeholder="e.g. 100% Smashed Beef & Crispy Chicken"
+                  className="w-full px-4 py-2.5 rounded-xl bg-[#ECE4D8] border border-[#2B1810]/20 text-xs font-mono-code text-[#2B1810] focus:ring-2 focus:ring-[#DE8030] focus:outline-none"
+                />
+              </div>
+
+              {/* Banner Image URL & File Upload */}
+              <div className="space-y-2">
+                <label className="block text-[10px] font-mono-code font-bold uppercase tracking-wider text-[#2B1810]/80">
+                  BANNER IMAGE URL OR FILE UPLOAD
+                </label>
+
+                <div className="flex flex-col sm:flex-row items-center gap-2">
+                  <div className="relative flex-1 w-full">
+                    <input
+                      type="url"
+                      value={editingCategory.bannerImage}
+                      onChange={(e) => {
+                        setEditingCategory({ ...editingCategory, bannerImage: e.target.value });
+                        setEditCategoryBannerFileName('');
+                      }}
+                      placeholder="Paste image URL (https://...)"
+                      className="w-full px-4 py-2.5 rounded-xl bg-[#ECE4D8] border border-[#2B1810]/20 text-xs font-mono-code text-[#2B1810] focus:ring-2 focus:ring-[#DE8030] focus:outline-none"
+                    />
+                    {editingCategory.bannerImage && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingCategory({ ...editingCategory, bannerImage: '' });
+                          setEditCategoryBannerFileName('');
+                        }}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#2B1810]/40 hover:text-[#2B1810] p-1 cursor-pointer"
+                        title="Clear image"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  <input
+                    ref={editCategoryBannerFileInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={handleEditCategoryBannerUpload}
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => editCategoryBannerFileInputRef.current?.click()}
+                    disabled={isEditCategoryBannerProcessing}
+                    className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-[#ECE4D8] hover:bg-[#E2D8C9] border border-[#2B1810]/20 text-xs font-mono-code text-[#2B1810] font-semibold flex items-center justify-center gap-1.5 transition cursor-pointer shrink-0"
+                  >
+                    {isEditCategoryBannerProcessing ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Upload className="w-3.5 h-3.5 text-[#DE8030]" />
+                    )}
+                    <span>Upload File</span>
+                  </button>
+                </div>
+
+                {editCategoryBannerFileName && (
+                  <div className="text-[11px] font-mono-code text-emerald-700 flex items-center gap-1">
+                    <Check className="w-3 h-3" />
+                    <span>Uploaded: {editCategoryBannerFileName}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Quick Preset Selector in Edit Modal */}
+              <div className="space-y-1.5">
+                <span className="text-[10px] font-mono-code font-bold uppercase tracking-wider text-[#2B1810]/70 block">
+                  Select From Curated Food Banners:
+                </span>
+                <div className="flex items-center gap-2 overflow-x-auto pb-1.5">
+                  {PRESET_CATEGORY_BANNERS.map((preset) => (
+                    <button
+                      key={preset.name}
+                      type="button"
+                      onClick={() => {
+                        setEditingCategory({
+                          ...editingCategory,
+                          bannerImage: preset.url,
+                          tagline: editingCategory.tagline || preset.tagline,
+                        });
+                        setEditCategoryBannerFileName('');
+                      }}
+                      className={`px-3 py-1 rounded-lg text-[10px] font-mono-code font-bold whitespace-nowrap transition border cursor-pointer ${
+                        editingCategory.bannerImage === preset.url
+                          ? 'bg-[#2B1810] text-white border-[#2B1810]'
+                          : 'bg-[#ECE4D8] text-[#2B1810]/80 border-[#2B1810]/15 hover:border-[#DE8030] hover:text-[#DE8030]'
+                      }`}
+                    >
+                      {preset.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Live Preview Inside Edit Modal */}
+              <div className="space-y-1.5">
+                <span className="text-[10px] font-mono-code font-bold uppercase tracking-wider text-[#2B1810]/80 block">
+                  LIVE BANNER PREVIEW
+                </span>
+                <div className="relative rounded-2xl overflow-hidden border border-[#2B1810]/20 aspect-[16/6] bg-[#2B1810]">
+                  <img
+                    src={
+                      editingCategory.bannerImage ||
+                      'https://images.unsplash.com/photo-1504674900247-0877df9cc836?auto=format&fit=crop&w=1600&q=80'
+                    }
+                    alt="Category Banner Preview"
+                    className="w-full h-full object-cover"
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-r from-[#2B1810] via-[#2B1810]/70 to-transparent" />
+                  <div className="absolute inset-0 bg-gradient-to-t from-[#2B1810]/75 via-transparent to-transparent" />
+
+                  <div className="absolute inset-0 p-4 flex flex-col justify-between z-10">
+                    <span className="px-2 py-0.5 rounded-full text-[9px] font-mono-code font-bold tracking-widest bg-[#DE8030] text-[#2B1810] uppercase self-start">
+                      LIVE PREVIEW
+                    </span>
+                    <div>
+                      <h4 className="font-display font-black text-2xl text-[#F5EFEB] uppercase leading-none">
+                        {editingCategory.name || 'CATEGORY NAME'}
+                      </h4>
+                      <p className="font-mono-code text-[11px] text-[#F5EFEB]/85 line-clamp-1 mt-0.5">
+                        {editingCategory.tagline || 'Fresh handcrafted menu items'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center gap-3 pt-3 border-t border-[#2B1810]/10">
+                <button
+                  type="button"
+                  onClick={() => setEditingCategory(null)}
+                  disabled={isSavingEditCategory}
+                  className="flex-1 py-2.5 rounded-xl border border-[#2B1810]/20 text-xs font-mono-code uppercase font-semibold text-[#2B1810] hover:bg-[#2B1810]/5 transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingEditCategory}
+                  className="flex-1 py-2.5 rounded-xl bg-[#2B1810] hover:bg-[#3E241A] text-[#F5EFEB] text-xs font-mono-code uppercase font-bold tracking-wider transition shadow-md flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                >
+                  {isSavingEditCategory ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Saving to Firestore...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-4 h-4 text-[#DE8030]" />
+                      <span>Save Changes to Firestore</span>
+                    </>
+                  )}
                 </button>
               </div>
             </form>

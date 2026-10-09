@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Search, Plus, Check, Loader2, UtensilsCrossed, ArrowRight } from 'lucide-react';
-import { MenuItem } from '../types';
+import { MenuItem, CategoryDetail } from '../types';
 import { ProductDetailModal } from './ProductDetailModal';
 
 interface CategoryMeta {
@@ -92,41 +92,58 @@ const DEFAULT_CATEGORY_META: CategoryMeta = {
   badgeText: 'KITCHEN SPECIAL',
 };
 
-// Resolve category metadata by direct key or fuzzy keyword match
-const getCategoryMeta = (catName: string): CategoryMeta => {
+// Resolve category metadata by direct key, Firestore custom category details, or fuzzy keyword match
+const getCategoryMeta = (catName: string, categoryDetails?: CategoryDetail[]): CategoryMeta => {
   const norm = catName.trim().toUpperCase();
-  if (CATEGORY_META_MAP[norm]) {
-    return CATEGORY_META_MAP[norm];
-  }
-  const lower = norm.toLowerCase();
-  if (lower.includes('burger')) return CATEGORY_META_MAP['BURGERS'];
-  if (lower.includes('pizza')) return CATEGORY_META_MAP['PIZZAS'];
-  if (lower.includes('fast') || lower.includes('fry') || lower.includes('fried') || lower.includes('snack')) {
-    return CATEGORY_META_MAP['FAST FOOD'];
-  }
-  if (lower.includes('deal') || lower.includes('combo') || lower.includes('platter')) {
-    return CATEGORY_META_MAP['DEALS'];
-  }
-  if (lower.includes('frappe')) return CATEGORY_META_MAP['FRAPPE'];
-  if (lower.includes('smoothie')) return CATEGORY_META_MAP['SMOOTHIES'];
-  if (lower.includes('shake')) return CATEGORY_META_MAP['SHAKES'];
-  if (lower.includes('drink') || lower.includes('beverage') || lower.includes('soda') || lower.includes('juice')) {
-    return CATEGORY_META_MAP['DRINKS'];
-  }
-  if (lower.includes('dessert') || lower.includes('cake') || lower.includes('sweet') || lower.includes('ice cream')) {
-    return CATEGORY_META_MAP['DESSERTS'];
-  }
-  if (lower.includes('side') || lower.includes('finger') || lower.includes('appetizer')) {
-    return CATEGORY_META_MAP['SIDES'];
-  }
-  if (lower.includes('chicken') || lower.includes('wing') || lower.includes('broast')) {
-    return CATEGORY_META_MAP['CHICKEN'];
-  }
-  if (lower.includes('sandwich') || lower.includes('sub') || lower.includes('wrap')) {
-    return CATEGORY_META_MAP['SANDWICHES'];
+
+  // Find base preset fallback first (direct key or fuzzy match)
+  let baseFallback: CategoryMeta = CATEGORY_META_MAP[norm] || DEFAULT_CATEGORY_META;
+  if (!CATEGORY_META_MAP[norm]) {
+    const lower = norm.toLowerCase();
+    if (lower.includes('burger')) baseFallback = CATEGORY_META_MAP['BURGERS'];
+    else if (lower.includes('pizza')) baseFallback = CATEGORY_META_MAP['PIZZAS'];
+    else if (lower.includes('fast') || lower.includes('fry') || lower.includes('fried') || lower.includes('snack')) {
+      baseFallback = CATEGORY_META_MAP['FAST FOOD'];
+    } else if (lower.includes('deal') || lower.includes('combo') || lower.includes('platter')) {
+      baseFallback = CATEGORY_META_MAP['DEALS'];
+    } else if (lower.includes('frappe')) baseFallback = CATEGORY_META_MAP['FRAPPE'];
+    else if (lower.includes('smoothie')) baseFallback = CATEGORY_META_MAP['SMOOTHIES'];
+    else if (lower.includes('shake')) baseFallback = CATEGORY_META_MAP['SHAKES'];
+    else if (lower.includes('drink') || lower.includes('beverage') || lower.includes('soda') || lower.includes('juice')) {
+      baseFallback = CATEGORY_META_MAP['DRINKS'];
+    } else if (lower.includes('dessert') || lower.includes('cake') || lower.includes('sweet') || lower.includes('ice cream')) {
+      baseFallback = CATEGORY_META_MAP['DESSERTS'];
+    } else if (lower.includes('side') || lower.includes('finger') || lower.includes('appetizer')) {
+      baseFallback = CATEGORY_META_MAP['SIDES'];
+    } else if (lower.includes('chicken') || lower.includes('wing') || lower.includes('broast')) {
+      baseFallback = CATEGORY_META_MAP['CHICKEN'];
+    } else if (lower.includes('sandwich') || lower.includes('sub') || lower.includes('wrap')) {
+      baseFallback = CATEGORY_META_MAP['SANDWICHES'];
+    }
   }
 
-  return DEFAULT_CATEGORY_META;
+  // 1. Dynamic Firestore check: Look for custom banner image or tagline from categories collection
+  if (categoryDetails && categoryDetails.length > 0) {
+    const custom = categoryDetails.find(
+      (c) =>
+        (c.name || '').trim().toUpperCase() === norm ||
+        (c.id || '').trim().toUpperCase() === norm
+    );
+    if (custom) {
+      const customBanner = custom.bannerImage?.trim();
+      const customTagline = custom.tagline?.trim();
+      if (customBanner || customTagline) {
+        return {
+          bannerImage: customBanner || baseFallback.bannerImage,
+          tagline: customTagline || baseFallback.tagline,
+          badgeText: baseFallback.badgeText || 'SPECIAL SELECTION',
+        };
+      }
+    }
+  }
+
+  // 2. Return preset or keyword matched metadata
+  return baseFallback;
 };
 
 // Dedicated stylish banner header for each category section
@@ -299,6 +316,7 @@ const ProductCard: React.FC<{
 interface MenuSectionProps {
   items: MenuItem[];
   categories?: string[];
+  categoryDetails?: CategoryDetail[];
   onAddToCart: (item: MenuItem, quantity?: number) => void;
   isLoading?: boolean;
 }
@@ -306,6 +324,7 @@ interface MenuSectionProps {
 export const MenuSection: React.FC<MenuSectionProps> = ({
   items,
   categories,
+  categoryDetails = [],
   onAddToCart,
   isLoading = false,
 }) => {
@@ -324,17 +343,18 @@ export const MenuSection: React.FC<MenuSectionProps> = ({
   const dynamicCategories = useMemo(() => {
     const defaultList = ['BURGERS', 'PIZZAS', 'FAST FOOD', 'DEALS', 'DRINKS', 'FRAPPE', 'SMOOTHIES'];
     const propCats = (categories || []).map((c) => c.trim().toUpperCase()).filter(Boolean);
+    const detailCats = (categoryDetails || []).map((c) => c.name.trim().toUpperCase()).filter(Boolean);
     const itemCats = items.map((i) => (i.category || '').trim().toUpperCase()).filter(Boolean);
-    const allUnique = Array.from(new Set([...defaultList, ...propCats, ...itemCats]));
+    const allUnique = Array.from(new Set([...defaultList, ...propCats, ...detailCats, ...itemCats]));
     return ['ALL', ...allUnique];
-  }, [categories, items]);
+  }, [categories, categoryDetails, items]);
 
   // Dynamically group products by category
   const categoryGroups = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     const normSelected = selectedCategory.trim().toUpperCase();
 
-    // 1. Gather all unique category names present in items and configured categories
+    // 1. Gather all unique category names present in items, configured categories, and category details
     const defaultOrder = [
       'BURGERS',
       'PIZZAS',
@@ -351,17 +371,19 @@ export const MenuSection: React.FC<MenuSectionProps> = ({
     ];
 
     const propCats = (categories || []).map((c) => c.trim().toUpperCase()).filter(Boolean);
+    const detailCats = (categoryDetails || []).map((c) => c.name.trim().toUpperCase()).filter(Boolean);
     const itemCats = items.map((i) => (i.category || '').trim().toUpperCase()).filter(Boolean);
+    const allConfigured = Array.from(new Set([...propCats, ...detailCats]));
 
     // Build the ordered master category list
     const masterCategories: string[] = [];
     defaultOrder.forEach((cat) => {
-      if (itemCats.includes(cat) || propCats.includes(cat)) {
+      if (itemCats.includes(cat) || allConfigured.includes(cat)) {
         if (!masterCategories.includes(cat)) masterCategories.push(cat);
       }
     });
     // Add any remaining categories
-    [...propCats, ...itemCats].forEach((cat) => {
+    [...allConfigured, ...itemCats].forEach((cat) => {
       if (!masterCategories.includes(cat)) masterCategories.push(cat);
     });
 
@@ -414,7 +436,7 @@ export const MenuSection: React.FC<MenuSectionProps> = ({
     }
 
     return groups;
-  }, [items, categories, searchQuery, selectedCategory]);
+  }, [items, categories, categoryDetails, searchQuery, selectedCategory]);
 
   // Total matching products count across all groups
   const totalMatchingProducts = useMemo(() => {
@@ -642,7 +664,7 @@ export const MenuSection: React.FC<MenuSectionProps> = ({
         /* Category-Wise Sections with Individual Banners */
         <div className="space-y-12 sm:space-y-16">
           {categoryGroups.map((group) => {
-            const meta = getCategoryMeta(group.category);
+            const meta = getCategoryMeta(group.category, categoryDetails);
             const sectionId = `category-${group.category.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
 
             return (

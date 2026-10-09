@@ -9,7 +9,7 @@ import {
   getDoc,
 } from 'firebase/firestore';
 import { db } from '../firebase';
-import { MenuItem, CustomerOrder, StoreStatus } from '../types';
+import { MenuItem, CustomerOrder, StoreStatus, CategoryDetail } from '../types';
 import { INITIAL_HERO_IMAGE } from '../data/initialMenu';
 
 const PRODUCTS_COLLECTION = 'products';
@@ -136,10 +136,83 @@ export const subscribeToMenuItems = (
 };
 
 /**
+ * Direct one-shot fetch for products from Firestore 'products' collection
+ */
+export const fetchMenuItemsOnce = async (): Promise<MenuItem[]> => {
+  try {
+    const productsRef = collection(db, PRODUCTS_COLLECTION);
+    const snapshot = await getDocs(productsRef);
+    if (snapshot.empty) return [];
+
+    const items: MenuItem[] = [];
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      if (data.name) {
+        items.push({
+          id: docSnap.id,
+          name: data.name || '',
+          category: data.category || 'BURGERS',
+          price: Number(data.price) || 0,
+          originalPrice: data.originalPrice ? Number(data.originalPrice) : undefined,
+          description: data.description || '',
+          image: data.image || '',
+          tag: data.tag || undefined,
+          isAvailable: data.isAvailable !== false,
+        });
+      }
+    });
+    return items;
+  } catch (err) {
+    console.warn('[Firestore] Notice during direct products query:', err);
+    return [];
+  }
+};
+
+/**
+ * Direct one-shot fetch for categories from Firestore 'categories' collection
+ */
+export const fetchCategoryDetailsOnce = async (): Promise<CategoryDetail[]> => {
+  try {
+    const categoriesRef = collection(db, CATEGORIES_COLLECTION);
+    const snapshot = await getDocs(categoriesRef);
+    if (snapshot.empty) return [];
+
+    const list: CategoryDetail[] = [];
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      const name = String(data.name || docSnap.id).trim().toUpperCase();
+      if (name) {
+        list.push({
+          id: docSnap.id,
+          name,
+          bannerImage: data.bannerImage || undefined,
+          tagline: data.tagline || undefined,
+          updatedAt: data.updatedAt || data.updatedAtTimestamp || undefined,
+        });
+      }
+    });
+
+    // Deduplicate by category name
+    const seen = new Set<string>();
+    return list.filter((item) => {
+      if (seen.has(item.name)) return false;
+      seen.add(item.name);
+      return true;
+    });
+  } catch (err) {
+    console.warn('[Firestore] Notice during direct categories query:', err);
+    return [];
+  }
+};
+
+/**
  * Real-time subscription to the Firestore 'categories' collection using onSnapshot.
  */
-export const subscribeToCategories = (
-  onUpdate: (categories: string[]) => void,
+/**
+  * Real-time listener for detailed categories in Firestore (with custom banners & taglines)
+  */
+export const subscribeToCategoryDetails = (
+  onUpdate: (categories: CategoryDetail[]) => void,
   onError?: (error: Error) => void
 ): (() => void) => {
   try {
@@ -153,28 +226,108 @@ export const subscribeToCategories = (
           return;
         }
 
-        const list: string[] = [];
+        const list: CategoryDetail[] = [];
         snapshot.forEach((docSnap) => {
           const data = docSnap.data();
-          const name = data.name || docSnap.id;
+          const name = String(data.name || docSnap.id).trim().toUpperCase();
           if (name) {
-            list.push(String(name).trim().toUpperCase());
+            list.push({
+              id: docSnap.id,
+              name,
+              bannerImage: data.bannerImage || undefined,
+              tagline: data.tagline || undefined,
+              updatedAt: data.updatedAt || data.updatedAtTimestamp || undefined,
+            });
           }
         });
 
-        onUpdate(Array.from(new Set(list.filter(Boolean))));
+        // Deduplicate by category name
+        const seen = new Set<string>();
+        const unique = list.filter((item) => {
+          if (seen.has(item.name)) return false;
+          seen.add(item.name);
+          return true;
+        });
+
+        onUpdate(unique);
       },
       (error) => {
-        console.warn('[Firestore] Categories subscription notice:', error.message);
+        console.warn('[Firestore] Category details subscription notice:', error.message);
         if (onError) onError(error);
       }
     );
 
     return unsubscribe;
   } catch (err: any) {
-    console.warn('[Firestore] Error setting up categories subscription:', err);
+    console.warn('[Firestore] Error setting up category details subscription:', err);
     if (onError && err instanceof Error) onError(err);
     return () => {};
+  }
+};
+
+/**
+ * Real-time listener for categories collection in Firestore
+ */
+export const subscribeToCategories = (
+  onUpdate: (categories: string[]) => void,
+  onError?: (error: Error) => void
+): (() => void) => {
+  return subscribeToCategoryDetails(
+    (details) => {
+      onUpdate(details.map((d) => d.name));
+    },
+    onError
+  );
+};
+
+/**
+ * Save or update a category with its custom banner image in Firestore 'categories' collection
+ */
+export const saveCategoryWithBanner = async (category: {
+  id?: string;
+  name: string;
+  bannerImage?: string;
+  tagline?: string;
+}): Promise<void> => {
+  try {
+    const cleanName = category.name.trim().toUpperCase();
+    const docId = (category.id || cleanName).trim();
+    const docRef = doc(db, CATEGORIES_COLLECTION, docId);
+    await setDoc(
+      docRef,
+      sanitizeForFirestore({
+        id: docId,
+        name: cleanName,
+        bannerImage: category.bannerImage || '',
+        tagline: category.tagline || '',
+        updatedAt: Date.now(),
+      }),
+      { merge: true }
+    );
+  } catch (err: any) {
+    if (isPermissionDenied(err)) {
+      console.warn('[Firestore] Notice: Category saved locally. Cloud sync requires staff permissions.');
+      return;
+    }
+    console.warn('[Firestore] Error saving category with banner to Firestore:', err);
+    throw err;
+  }
+};
+
+/**
+ * Delete a category document from Firestore
+ */
+export const deleteCategoryDocument = async (categoryIdOrName: string): Promise<void> => {
+  try {
+    const docRef = doc(db, CATEGORIES_COLLECTION, categoryIdOrName.trim());
+    await deleteDoc(docRef);
+  } catch (err: any) {
+    if (isPermissionDenied(err)) {
+      console.warn('[Firestore] Notice: Category deleted locally.');
+      return;
+    }
+    console.warn('[Firestore] Error deleting category from Firestore:', err);
+    throw err;
   }
 };
 
@@ -228,7 +381,7 @@ export const saveMenuItem = async (item: MenuItem): Promise<void> => {
 };
 
 /**
- * Edit an existing menu item in Firestore
+ * Edit an existing menu item in Firestore 'products' collection
  */
 export const editMenuItem = async (
   id: string,
@@ -238,9 +391,11 @@ export const editMenuItem = async (
     const docRef = doc(db, PRODUCTS_COLLECTION, id);
     const sanitized = sanitizeForFirestore({
       ...updates,
+      id,
       updatedAtTimestamp: Date.now(),
     });
-    await updateDoc(docRef, sanitized);
+    await setDoc(docRef, sanitized, { merge: true });
+    console.log(`[Firestore] Successfully updated product document "products/${id}".`);
   } catch (err: any) {
     if (isPermissionDenied(err)) {
       console.warn('[Firestore] Notice: Product updated locally. Updating in cloud requires staff write permissions in Firestore rules.');
@@ -252,7 +407,7 @@ export const editMenuItem = async (
 };
 
 /**
- * Toggle availability of a menu item in Firestore
+ * Toggle availability of a menu item in Firestore 'products' collection
  */
 export const toggleMenuItemAvailability = async (
   id: string,
@@ -260,7 +415,7 @@ export const toggleMenuItemAvailability = async (
 ): Promise<void> => {
   try {
     const docRef = doc(db, PRODUCTS_COLLECTION, id);
-    await updateDoc(docRef, { isAvailable });
+    await setDoc(docRef, { isAvailable, updatedAtTimestamp: Date.now() }, { merge: true });
   } catch (err: any) {
     if (isPermissionDenied(err)) {
       console.warn('[Firestore] Notice: Availability toggled locally. Cloud sync requires write permissions in Firestore rules.');

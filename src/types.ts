@@ -60,3 +60,11 @@ export interface StaffUser {
   isOwner: boolean;
 }
 
+export interface CategoryDetail {
+  id: string;
+  name: string;
+  bannerImage?: string;
+  tagline?: string;
+  updatedAt?: number;
+}
+

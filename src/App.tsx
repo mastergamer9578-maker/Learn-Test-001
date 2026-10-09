@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { signOut, applyActionCode } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from './firebase';
-import { MenuItem, CartItem, CustomerOrder, StoreStatus, DeliverySettings, DEFAULT_DELIVERY_SETTINGS, StaffUser } from './types';
+import { MenuItem, CartItem, CustomerOrder, StoreStatus, DeliverySettings, DEFAULT_DELIVERY_SETTINGS, StaffUser, CategoryDetail } from './types';
 import { INITIAL_MENU_ITEMS, INITIAL_HERO_IMAGE } from './data/initialMenu';
 import { Navbar } from './components/Navbar';
 import { Hero } from './components/Hero';
@@ -16,12 +16,17 @@ import { ContactModal } from './components/ContactModal';
 import { Footer } from './components/Footer';
 import {
   subscribeToMenuItems,
+  fetchMenuItemsOnce,
   saveMenuItem,
   editMenuItem,
   toggleMenuItemAvailability,
   deleteMenuItem,
   subscribeToCategories,
+  subscribeToCategoryDetails,
+  fetchCategoryDetailsOnce,
   saveCategories,
+  saveCategoryWithBanner,
+  deleteCategoryDocument,
   subscribeToOrders,
   createCustomerOrder,
   updateOrderStatus,
@@ -136,9 +141,10 @@ export default function App() {
     }
   });
 
+  const DEFAULT_CATEGORIES = ['BURGERS', 'PIZZAS', 'FAST FOOD', 'DEALS', 'DRINKS'];
+
   // Shared Categories State (Real-time Firestore collection sync + product category derivation)
   const [categories, setCategories] = useState<string[]>(() => {
-    const DEFAULT_CATEGORIES = ['BURGERS', 'PIZZAS', 'FAST FOOD', 'DEALS', 'DRINKS'];
     try {
       const saved = localStorage.getItem('shan_categories');
       if (saved) {
@@ -152,12 +158,41 @@ export default function App() {
     return DEFAULT_CATEGORIES;
   });
 
-  // Real-time Firestore subscriber for 'categories' collection
+  // Category Details State (with custom banners & metadata from Firestore)
+  const [categoryDetails, setCategoryDetails] = useState<CategoryDetail[]>(() => {
+    try {
+      const saved = localStorage.getItem('shan_category_details');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  // Real-time Firestore subscriber + initial fetch for detailed categories ('categories' collection)
   useEffect(() => {
-    const unsubscribe = subscribeToCategories(
-      (liveCategories) => {
-        if (liveCategories && liveCategories.length > 0) {
-          setCategories((prev) => Array.from(new Set([...liveCategories, ...prev])));
+    // 1. Instant direct fetch from Firestore 'categories' collection
+    fetchCategoryDetailsOnce().then((liveDetails) => {
+      if (liveDetails.length > 0) {
+        setCategoryDetails(liveDetails);
+        setCategories((prev) => {
+          const names = liveDetails.map((d) => d.name);
+          return Array.from(new Set([...DEFAULT_CATEGORIES, ...names, ...prev]));
+        });
+      }
+    });
+
+    // 2. Continuous real-time listener for categories collection
+    const unsubscribe = subscribeToCategoryDetails(
+      (liveDetails) => {
+        if (liveDetails) {
+          setCategoryDetails(liveDetails);
+          try {
+            localStorage.setItem('shan_category_details', JSON.stringify(liveDetails));
+          } catch {}
+          setCategories((prev) => {
+            const names = liveDetails.map((d) => d.name);
+            return Array.from(new Set([...DEFAULT_CATEGORIES, ...names, ...prev]));
+          });
         }
       },
       (err) => {
@@ -194,6 +229,51 @@ export default function App() {
     });
   };
 
+  // Save/Update category with custom banner in Firestore
+  const handleSaveCategoryWithBanner = async (category: {
+    id?: string;
+    name: string;
+    bannerImage?: string;
+    tagline?: string;
+  }) => {
+    try {
+      await saveCategoryWithBanner(category);
+      const cleanName = category.name.trim().toUpperCase();
+      setCategoryDetails((prev) => {
+        const idx = prev.findIndex((c) => c.name === cleanName || c.id === category.id);
+        const item: CategoryDetail = {
+          id: category.id || cleanName,
+          name: cleanName,
+          bannerImage: category.bannerImage,
+          tagline: category.tagline,
+        };
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = item;
+          return next;
+        }
+        return [...prev, item];
+      });
+      setCategories((prev) => Array.from(new Set([cleanName, ...prev])));
+    } catch (err) {
+      console.warn('[Firestore] Error saving category with banner:', err);
+      throw err;
+    }
+  };
+
+  // Delete category from Firestore
+  const handleDeleteCategory = async (catIdOrName: string) => {
+    try {
+      await deleteCategoryDocument(catIdOrName);
+      const clean = catIdOrName.trim().toUpperCase();
+      setCategoryDetails((prev) => prev.filter((c) => c.id !== catIdOrName && c.name !== clean));
+      setCategories((prev) => prev.filter((c) => c !== clean));
+    } catch (err) {
+      console.warn('[Firestore] Error deleting category from Firestore:', err);
+      throw err;
+    }
+  };
+
   // Initialize store settings and collections in background
   useEffect(() => {
     initializeFirestoreCollections().catch((err) => {
@@ -201,8 +281,17 @@ export default function App() {
     });
   }, []);
 
-  // 1. Live real-time Firestore listener for products ('products' collection)
+  // 1. Live real-time Firestore listener + initial direct fetch for products ('products' collection)
   useEffect(() => {
+    // Immediate direct query for instant rendering
+    fetchMenuItemsOnce().then((items) => {
+      if (items.length > 0) {
+        setMenuItems(items);
+        setIsLoadingMenu(false);
+      }
+    });
+
+    // Real-time onSnapshot listener for instant continuous synchronization
     const unsubscribe = subscribeToMenuItems(
       (liveItems) => {
         setMenuItems(liveItems);
@@ -553,13 +642,16 @@ export default function App() {
     }
   };
 
-  const handleEditMenuItem = (id: string, updates: Partial<MenuItem>) => {
+  const handleEditMenuItem = async (id: string, updates: Partial<MenuItem>): Promise<void> => {
     setMenuItems((prev) =>
       prev.map((item) => (item.id === id ? { ...item, ...updates } : item))
     );
-    editMenuItem(id, updates).catch((err) => {
+    try {
+      await editMenuItem(id, updates);
+    } catch (err) {
       console.warn('[Firestore] Error editing product in Firestore:', err);
-    });
+      throw err;
+    }
   };
 
   // Staff Order Management (Real-time updates to Firestore 'orders' collection)
@@ -646,6 +738,7 @@ export default function App() {
             <MenuSection
               items={menuItems}
               categories={categories}
+              categoryDetails={categoryDetails}
               onAddToCart={handleAddToCart}
               isLoading={isLoadingMenu}
             />
@@ -655,7 +748,10 @@ export default function App() {
           <StaffDashboard
             menuItems={menuItems}
             categories={categories}
+            categoryDetails={categoryDetails}
             onUpdateCategories={handleUpdateCategories}
+            onSaveCategoryWithBanner={handleSaveCategoryWithBanner}
+            onDeleteCategory={handleDeleteCategory}
             deliverySettings={deliverySettings}
             onUpdateDeliverySettings={handleUpdateDeliverySettings}
             onAddMenuItem={handleAddMenuItem}
