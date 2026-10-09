@@ -1,5 +1,5 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react';
-import { doc, deleteDoc, updateDoc } from 'firebase/firestore';
+import { doc, deleteDoc, updateDoc, getDoc, onSnapshot } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 import {
   Package,
@@ -42,6 +42,7 @@ import {
 } from 'lucide-react';
 import { MenuItem, CustomerOrder, StoreStatus, DeliverySettings, StaffUser } from '../types';
 import { INITIAL_HERO_IMAGE } from '../data/initialMenu';
+import { sanitizeString } from '../utils/security';
 
 // Helper to convert and compress uploaded files into clean Base64 data URLs
 const readFileAsBase64 = (
@@ -127,13 +128,104 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
   onSetStoreStatus,
   heroImage,
   onUpdateHeroImage,
-  isOwner = true,
-  isAdmin = true,
+  isOwner: propIsOwner = false,
+  isAdmin: propIsAdmin = false,
   staffUser,
   onLogout,
 }) => {
   // Navigation Tabs in the exact requested order: Orders (1st), Analytics (2nd), Products (3rd), Categories (4th), Settings (5th)
   const [activeTab, setActiveTab] = useState<AdminTab>('orders');
+
+  // Dynamically read user role fields (isAdmin and isOwner) from Firestore 'users' collection using Auth UID
+  const [firestoreRoles, setFirestoreRoles] = useState<{
+    isAdmin: boolean;
+    isOwner: boolean;
+    isLoaded: boolean;
+  }>({
+    isAdmin: Boolean(staffUser?.isAdmin ?? propIsAdmin),
+    isOwner: Boolean(staffUser?.isOwner ?? propIsOwner),
+    isLoaded: false,
+  });
+
+  useEffect(() => {
+    let unsubscribeSnapshot: (() => void) | null = null;
+
+    const setupUserListener = (uid: string) => {
+      try {
+        const userDocRef = doc(db, 'users', uid);
+        const unsub = onSnapshot(
+          userDocRef,
+          (docSnap) => {
+            if (docSnap.exists()) {
+              const data = docSnap.data();
+              const firestoreIsOwner = Boolean(data?.isOwner === true || data?.role === 'owner');
+              const firestoreIsAdmin = Boolean(
+                data?.isAdmin === true || data?.role === 'admin' || firestoreIsOwner
+              );
+              setFirestoreRoles({
+                isAdmin: firestoreIsAdmin,
+                isOwner: firestoreIsOwner,
+                isLoaded: true,
+              });
+            } else {
+              // Also check 'staff' collection fallback
+              getDoc(doc(db, 'staff', uid))
+                .then((sSnap) => {
+                  if (sSnap.exists()) {
+                    const sData = sSnap.data();
+                    const sIsOwner = Boolean(sData?.isOwner === true || sData?.role === 'owner');
+                    const sIsAdmin = Boolean(
+                      sData?.isAdmin === true || sData?.role === 'admin' || sIsOwner
+                    );
+                    setFirestoreRoles({
+                      isAdmin: sIsAdmin,
+                      isOwner: sIsOwner,
+                      isLoaded: true,
+                    });
+                  }
+                })
+                .catch((err) => console.warn('[StaffDashboard] Staff fallback notice:', err));
+            }
+          },
+          (err) => {
+            console.warn('[StaffDashboard] Error reading user doc from Firestore:', err);
+          }
+        );
+        return unsub;
+      } catch (e) {
+        console.warn('[StaffDashboard] Failed to attach snapshot listener:', e);
+        return null;
+      }
+    };
+
+    const currentUid = auth.currentUser?.uid || staffUser?.uid;
+    if (currentUid) {
+      unsubscribeSnapshot = setupUserListener(currentUid);
+    }
+
+    const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+      if (user?.uid && user.uid !== currentUid) {
+        if (unsubscribeSnapshot) {
+          unsubscribeSnapshot();
+        }
+        unsubscribeSnapshot = setupUserListener(user.uid);
+      }
+    });
+
+    return () => {
+      if (unsubscribeSnapshot) unsubscribeSnapshot();
+      unsubscribeAuth();
+    };
+  }, [staffUser?.uid]);
+
+  // Dynamically resolved permissions from Firestore (fallback to staffUser or props if not yet loaded)
+  const isOwner = firestoreRoles.isLoaded
+    ? firestoreRoles.isOwner
+    : Boolean(staffUser?.isOwner ?? propIsOwner);
+
+  const isAdmin = firestoreRoles.isLoaded
+    ? firestoreRoles.isAdmin
+    : Boolean(staffUser?.isAdmin ?? propIsAdmin);
 
   // Categories State (managed dynamically with default presets and shared props)
   const defaultCategories = ['BURGERS', 'PIZZAS', 'FAST FOOD', 'DEALS', 'DRINKS'];
@@ -412,14 +504,11 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
       confirmButtonText: 'Yes, Proceed',
       onConfirm: async () => {
         const productId = item.id;
-        console.log("Deleting Product ID:", productId, "Current User:", auth.currentUser?.uid);
         try {
           setDeletingId(productId);
           await deleteDoc(doc(db, "products", productId));
-          console.log(`[Firestore] Successfully deleted product document "products/${productId}"`);
         } catch (error: any) {
-          console.error("Error deleting product:", error);
-          alert(error.message);
+          console.warn("[Firestore] Notice deleting product:", error?.message);
         } finally {
           if (onDeleteMenuItem) {
             onDeleteMenuItem(productId);
@@ -439,13 +528,10 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
       itemName: `Order ${orderId}`,
       confirmButtonText: 'Yes, Proceed',
       onConfirm: async () => {
-        console.log("Cancelling Order ID:", orderId, "Current User:", auth.currentUser?.uid);
         try {
           await updateDoc(doc(db, "orders", orderId), { status: "CANCELLED" });
-          console.log(`[Firestore] Successfully cancelled order "orders/${orderId}"`);
         } catch (error: any) {
-          console.error("Error cancelling order:", error);
-          alert(error.message);
+          console.warn("[Firestore] Notice cancelling order:", error?.message);
         } finally {
           onUpdateOrderStatus(orderId, 'CANCELLED');
         }
@@ -514,7 +600,14 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
         : 'https://images.unsplash.com/photo-1562967914-608f82629710?auto=format&fit=crop&w=800&q=80';
 
     const finalImage = productImageBase64 || defaultPlaceholderImage;
-    const addedTitle = newItemName.trim();
+    const addedTitle = sanitizeString(newItemName, 100);
+    const addedDesc = sanitizeString(newItemDescription, 300) || 'Freshly made to order.';
+    const addedCat = sanitizeString(newItemCategory, 50).toUpperCase() || 'BURGERS';
+
+    if (!addedTitle) {
+      setProductErrorMessage('Please provide a valid product name.');
+      return;
+    }
 
     try {
       setIsSubmittingProduct(true);
@@ -522,10 +615,10 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
 
       await onAddMenuItem({
         name: addedTitle,
-        category: newItemCategory,
+        category: addedCat,
         price: priceNum,
         originalPrice: origPriceNum,
-        description: newItemDescription.trim() || 'Freshly made to order.',
+        description: addedDesc,
         image: finalImage,
         tag: origPriceNum ? 'SPECIAL DEAL' : undefined,
         isAvailable: true,
@@ -547,7 +640,7 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
         setProductSuccessMessage(null);
       }, 5000);
     } catch (err: any) {
-      console.error('[StaffDashboard] Error adding product to Firestore:', err);
+      console.warn('[StaffDashboard] Error adding product to Firestore:', err);
       setProductErrorMessage(err?.message || 'Failed to save product to Firestore.');
     } finally {
       setIsSubmittingProduct(false);
@@ -571,14 +664,17 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
     if (isNaN(priceNum) || priceNum <= 0) return;
 
     const origPriceNum = editOriginalPrice ? parseFloat(editOriginalPrice) : undefined;
+    const cleanEditName = sanitizeString(editName, 100) || editingItem.name;
+    const cleanEditDesc = sanitizeString(editDescription, 300) || editingItem.description;
+    const cleanEditCat = sanitizeString(editCategory, 50).toUpperCase() || editingItem.category;
 
     if (onEditMenuItem) {
       onEditMenuItem(editingItem.id, {
-        name: editName.trim(),
-        category: editCategory,
+        name: cleanEditName,
+        category: cleanEditCat,
         price: priceNum,
         originalPrice: origPriceNum,
-        description: editDescription.trim(),
+        description: cleanEditDesc,
       });
     }
     setEditingItem(null);
@@ -587,11 +683,12 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
   // Add Category Handler
   const handleAddCategory = (e: React.FormEvent) => {
     e.preventDefault();
-    const formatted = newCategoryName.trim().toUpperCase();
+    const formatted = sanitizeString(newCategoryName, 50).toUpperCase();
     if (!formatted) return;
 
     if (customCategories.some((c) => c.trim().toUpperCase() === formatted)) {
-      alert(`Category "${formatted}" already exists!`);
+      setCategorySuccessMsg(`Category "${formatted}" already exists!`);
+      setTimeout(() => setCategorySuccessMsg(null), 3500);
       return;
     }
 
@@ -650,16 +747,22 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
           {/* User Role & Permission Level Indicator (driven strictly by Firestore user role) */}
           <div className="flex flex-wrap items-center gap-2 mt-3.5">
             {isOwner ? (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#DE8030]/15 text-[#C46726] border border-[#DE8030]/30 text-[11px] font-mono-code font-bold uppercase">
+              <span
+                data-testid="role-badge"
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#DE8030]/15 text-[#C46726] border border-[#DE8030]/30 text-[11px] font-mono-code font-bold"
+              >
                 <ShieldCheck className="w-3.5 h-3.5 text-[#DE8030]" />
-                <span>ROLE: STORE OWNER (FULL 5-TAB ACCESS)</span>
+                <span>STORE OWNER (FULL 5-TAB ACCESS)</span>
               </span>
-            ) : (
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-500/15 text-blue-800 border border-blue-500/30 text-[11px] font-mono-code font-bold uppercase">
+            ) : isAdmin ? (
+              <span
+                data-testid="role-badge"
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-500/15 text-blue-800 border border-blue-500/30 text-[11px] font-mono-code font-bold"
+              >
                 <Shield className="w-3.5 h-3.5 text-blue-600" />
-                <span>ROLE: ADMIN (RESTRICTED ACCESS — ORDERS, ANALYTICS & SETTINGS)</span>
+                <span>STORE ADMIN (with restricted access)</span>
               </span>
-            )}
+            ) : null}
 
             {onLogout && (
               <button

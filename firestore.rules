@@ -2,37 +2,54 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Users Collection (Profile & Role verification)
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwnerOfDoc(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Users Collection (Strict profile & role verification)
+    // Only authenticated staff/users can read profile documents; only owner or authenticated user can modify
     match /users/{userId} {
-      allow read, write: if true;
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && (isOwnerOfDoc(userId) || request.auth.token.email_verified == true);
     }
 
-    // Products: Public menu browsing and direct admin dashboard updates
+    // Products: Public menu browsing, but creation/updates/deletions require staff authentication
     match /products/{productId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if isAuthenticated();
     }
 
-    // Categories: Public menu navigation and categories management
+    // Categories: Public menu navigation, modifications require staff authentication
     match /categories/{categoryId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if isAuthenticated();
     }
 
-    // Orders: Anyone can create orders; live kitchen queue sync
+    // Orders: Anyone can place a validated order, but live queue read/status updates require staff authentication
     match /orders/{orderId} {
-      allow read, write: if true;
+      allow create: if request.resource.data.customerName is string &&
+                    request.resource.data.items is list &&
+                    request.resource.data.total is number;
+      allow read, update, delete: if isAuthenticated();
     }
 
-    // Store Settings (Hero banner, store status)
+    // Store Settings: Public storefront reads, but updates require staff authentication
     match /settings/{settingId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if isAuthenticated();
     }
 
-    // Staff Collection
+    // Staff Collection (Protected internal staff metadata)
     match /staff/{staffId} {
-      allow read, write: if true;
+      allow read, write: if isAuthenticated();
     }
 
-    // Default catch-all
+    // Default deny-all catch-all rule
     match /{document=**} {
       allow read, write: if false;
     }

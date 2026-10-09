@@ -41,15 +41,6 @@ export default function App() {
       const saved = sessionStorage.getItem('shan_staff_user');
       if (saved) return JSON.parse(saved);
     } catch {}
-    if (sessionStorage.getItem('shan_staff_auth') === 'true') {
-      return {
-        email: 'owner@shan.com',
-        name: 'Store Owner',
-        isAdmin: true,
-        isOwner: true,
-        role: 'owner',
-      };
-    }
     return null;
   });
 
@@ -312,15 +303,8 @@ export default function App() {
                   if (staffSnap.exists()) docSnap = staffSnap;
                 }
                 const data = docSnap?.exists() ? docSnap.data() : null;
-                const emailLower = (auth.currentUser.email || '').toLowerCase();
-                const isOwner = Boolean(
-                  data?.isOwner === true ||
-                  data?.role === 'owner' ||
-                  emailLower.includes('owner') ||
-                  emailLower.startsWith('shan') ||
-                  emailLower.includes('master')
-                );
-                const isAdmin = Boolean(data?.isAdmin !== undefined ? data.isAdmin : true);
+                const isOwner = Boolean(data?.isOwner === true || data?.role === 'owner');
+                const isAdmin = Boolean(data?.isAdmin === true || data?.role === 'admin' || isOwner);
 
                 if (isAdmin || isOwner) {
                   const authenticatedUser: StaffUser = {
@@ -348,6 +332,44 @@ export default function App() {
 
       handleEmailVerification();
     }
+  }, []);
+
+  // 5. Dynamic sync of authenticated staff permissions directly from Firestore 'users' collection
+  useEffect(() => {
+    const unsubscribe = auth.onAuthStateChanged(async (firebaseUser) => {
+      if (firebaseUser) {
+        if (!firebaseUser.emailVerified) {
+          return;
+        }
+        try {
+          let docSnap = await getDoc(doc(db, 'users', firebaseUser.uid));
+          if (!docSnap.exists()) {
+            const staffSnap = await getDoc(doc(db, 'staff', firebaseUser.uid));
+            if (staffSnap.exists()) docSnap = staffSnap;
+          }
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            const isOwner = Boolean(data?.isOwner === true || data?.role === 'owner');
+            const isAdmin = Boolean(data?.isAdmin === true || data?.role === 'admin' || isOwner);
+            if (isAdmin || isOwner) {
+              const authenticatedUser: StaffUser = {
+                uid: firebaseUser.uid,
+                email: firebaseUser.email || '',
+                name: data?.name || data?.displayName || (isOwner ? 'Store Owner' : 'Store Administrator'),
+                isAdmin,
+                isOwner,
+                role: isOwner ? 'owner' : 'admin',
+              };
+              setStaffUser(authenticatedUser);
+              sessionStorage.setItem('shan_staff_user', JSON.stringify(authenticatedUser));
+            }
+          }
+        } catch (err) {
+          console.warn('[App] Firestore user role sync notice:', err);
+        }
+      }
+    });
+    return () => unsubscribe();
   }, []);
 
   // Fallback local persistence for settings and status
@@ -647,8 +669,8 @@ export default function App() {
             onSetStoreStatus={handleSetStoreStatus}
             heroImage={heroImage}
             onUpdateHeroImage={handleUpdateHeroImage}
-            isOwner={staffUser ? Boolean(staffUser.isOwner) : true}
-            isAdmin={staffUser ? Boolean(staffUser.isAdmin) : true}
+            isOwner={Boolean(staffUser?.isOwner)}
+            isAdmin={Boolean(staffUser?.isAdmin)}
             staffUser={staffUser || undefined}
             onLogout={handleStaffLogout}
           />

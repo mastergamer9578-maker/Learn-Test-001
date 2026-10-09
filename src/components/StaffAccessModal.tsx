@@ -20,6 +20,7 @@ import {
 import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 import { StaffUser } from '../types';
+import { sanitizeString, checkRateLimit } from '../utils/security';
 
 interface StaffAccessModalProps {
   isOpen: boolean;
@@ -183,11 +184,18 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    const cleanId = staffId.trim();
-    const cleanPass = password.trim();
+    const cleanId = sanitizeString(staffId, 120);
+    const cleanPass = password.trim().slice(0, 100);
 
     if (!cleanId || !cleanPass) {
       setError('Please enter both Staff Email and Password.');
+      return;
+    }
+
+    // Rate limiting: maximum 5 login attempts per 60 seconds
+    const rateCheck = checkRateLimit('staff_login_attempt', 5, 60);
+    if (!rateCheck.allowed) {
+      setError(`Too many login attempts. For security reasons, please wait ${rateCheck.waitSeconds} seconds before trying again.`);
       return;
     }
 
@@ -195,7 +203,7 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
     setError(null);
     setSuccessInfo(null);
 
-    const authInstance = auth || (window as any).__firebaseAuth;
+    const authInstance = auth;
 
     try {
       let isVerified = false;
@@ -343,32 +351,10 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
         }
       }
 
-      // 3. Fallback support: Default store credentials with role mapping
-      if (!isVerified && !specificAuthError) {
-        const validFallbackIds = ['owner', 'shan', 'admin', 'staff', 'manager'];
-        const validFallbackPass = ['1234', '2019', 'shan123', 'admin', 'password'];
-        if (
-          validFallbackIds.includes(cleanId.toLowerCase()) &&
-          validFallbackPass.includes(cleanPass)
-        ) {
-          isVerified = true;
-          const isOwner = ['owner', 'shan'].includes(cleanId.toLowerCase());
-          const authenticatedUser: StaffUser = {
-            email: `${cleanId.toLowerCase()}@shan.com`,
-            name: isOwner ? 'Store Owner' : 'Store Administrator',
-            isAdmin: true,
-            isOwner,
-            role: isOwner ? 'owner' : 'admin',
-          };
-          setError(null);
-          onSuccess(authenticatedUser);
-          return;
-        }
-      }
-
+      // If not authenticated via Firebase Auth or verified Firestore record, deny access
       setError(
         specificAuthError ||
-          'Authentication failed. Credentials do not match any user in Firebase Authentication or staff database.'
+          'Authentication failed. Invalid email/password or account not authorized.'
       );
     } catch (err: any) {
       console.error('[StaffAccess] Authentication exception:', err);

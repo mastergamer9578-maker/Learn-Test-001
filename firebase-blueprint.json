@@ -41,6 +41,9 @@
       "schema": "MenuItem",
       "description": "Collection of menu items for Shan Fast Food"
     },
+    "/categories/{categoryId}": {
+      "description": "Store menu category taxonomy"
+    },
     "/orders/{orderId}": {
       "schema": "CustomerOrder",
       "description": "Collection of live incoming and completed customer orders"

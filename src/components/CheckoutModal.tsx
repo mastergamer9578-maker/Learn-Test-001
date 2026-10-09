@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { X, CheckCircle2, ArrowLeft, ArrowRight, ShieldCheck, MapPin, Phone, User, FileText, ShoppingBag, Loader2 } from 'lucide-react';
+import { X, CheckCircle2, ArrowLeft, ArrowRight, ShieldCheck, MapPin, Phone, User, FileText, ShoppingBag, Loader2, AlertCircle } from 'lucide-react';
 import { CartItem, DeliverySettings } from '../types';
+import { sanitizeString, isValidPhone, checkRateLimit } from '../utils/security';
 
 interface CheckoutModalProps {
   isOpen: boolean;
@@ -31,6 +32,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const [customerAddress, setCustomerAddress] = useState('');
   const [orderNotes, setOrderNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [completedOrderId, setCompletedOrderId] = useState<string | null>(null);
 
   if (!isOpen) return null;
@@ -49,17 +51,38 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
   const handleSubmitOrder = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!customerName.trim() || !customerPhone.trim() || !customerAddress.trim()) {
+    setErrorMessage(null);
+
+    // Input sanitization against XSS and control characters
+    const cleanName = sanitizeString(customerName, 80);
+    const cleanPhone = sanitizeString(customerPhone, 25);
+    const cleanAddress = sanitizeString(customerAddress, 250);
+    const cleanNotes = sanitizeString(orderNotes, 300);
+
+    if (!cleanName || !cleanPhone || !cleanAddress) {
+      setErrorMessage('Please fill in your name, contact phone, and delivery address.');
+      return;
+    }
+
+    if (!isValidPhone(cleanPhone)) {
+      setErrorMessage('Please enter a valid phone number (e.g., 0300 1234567 or +92 300 1234567).');
+      return;
+    }
+
+    // Rate-limiting check: max 5 order submissions per 3 minutes
+    const rateCheck = checkRateLimit('customer_order_checkout', 5, 180);
+    if (!rateCheck.allowed) {
+      setErrorMessage(`Order rate limit reached. Please wait ${rateCheck.waitSeconds} seconds before placing another order.`);
       return;
     }
 
     setIsSubmitting(true);
     setTimeout(() => {
       const orderId = onCheckout({
-        customerName: customerName.trim(),
-        customerPhone: customerPhone.trim(),
-        customerAddress: customerAddress.trim(),
-        notes: orderNotes.trim() || undefined,
+        customerName: cleanName,
+        customerPhone: cleanPhone,
+        customerAddress: cleanAddress,
+        notes: cleanNotes || undefined,
       });
 
       setCompletedOrderId(orderId);
@@ -70,6 +93,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
   const handleCloseAndReset = () => {
     setCompletedOrderId(null);
+    setErrorMessage(null);
     onClose();
   };
 
@@ -225,6 +249,13 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                   <div className="text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#C46726] uppercase">
                     YOUR DELIVERY DETAILS
                   </div>
+
+                  {errorMessage && (
+                    <div className="p-3 rounded-xl bg-red-100 border border-red-300 text-red-800 text-xs font-mono-code flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                      <span>{errorMessage}</span>
+                    </div>
+                  )}
 
                   {/* Name Input */}
                   <div>
