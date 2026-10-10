@@ -16,6 +16,7 @@ import { StoryModal } from './components/StoryModal';
 import { ContactModal } from './components/ContactModal';
 import { NotFoundPage } from './components/NotFoundPage';
 import { ProtectedAuthGuard } from './components/ProtectedAuthGuard';
+import { AdminPrivateRoute } from './components/AdminPrivateRoute';
 import { Footer } from './components/Footer';
 import { updatePageSEO, ROUTE_SEO } from './utils/seo';
 import {
@@ -973,16 +974,12 @@ export default function App() {
             attemptedPath={attemptedPath}
           />
         ) : isProtectedDashboardPath(attemptedPath) || currentRoute === 'staff' || currentView === 'staff' ? (
-          /* Strict Protected Route Guard: /admin, /staff, /dashboard */
-          isAuthChecking ? (
-            <ProtectedAuthGuard
-              attemptedPath={attemptedPath}
-              isAuthChecking={true}
-              onSuccess={handleStaffAuthSuccess}
-              onGoHome={() => navigate('/')}
-            />
-          ) : isStaffAuthenticated && staffUser && auth.currentUser && auth.currentUser.emailVerified ? (
-            /* Verified Staff & Admin Management Dashboard */
+          /* Robust Admin Private Route Guard: Validates Active Session, Email Verification, and Firestore RBAC */
+          <AdminPrivateRoute
+            attemptedPath={attemptedPath}
+            onSuccess={handleStaffAuthSuccess}
+            onGoHome={() => navigate('/')}
+          >
             <StaffDashboard
               menuItems={menuItems}
               categories={categories}
@@ -1008,15 +1005,7 @@ export default function App() {
               staffUser={staffUser || undefined}
               onLogout={handleStaffLogout}
             />
-          ) : (
-            /* Unauthorized Access Blocked: Enforce Login Screen */
-            <ProtectedAuthGuard
-              attemptedPath={attemptedPath}
-              isAuthChecking={false}
-              onSuccess={handleStaffAuthSuccess}
-              onGoHome={() => navigate('/')}
-            />
-          )
+          </AdminPrivateRoute>
         ) : (
           <>
             {/* Customer Storefront: Hero Section */}

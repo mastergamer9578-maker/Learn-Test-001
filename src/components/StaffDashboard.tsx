@@ -1035,6 +1035,33 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
     });
   };
 
+  // Defense-in-depth: Halt rendering immediately if unauthorized according to Firestore claims
+  if (firestoreRoles.isLoaded && !isOwner && !isAdmin) {
+    return (
+      <div className="py-16 max-w-lg mx-auto px-4 text-center">
+        <div className="bg-[#ECE4D8] border-2 border-red-500/50 rounded-3xl p-8 shadow-xl space-y-4">
+          <div className="w-14 h-14 rounded-2xl bg-red-100 text-red-600 flex items-center justify-center mx-auto border border-red-200">
+            <ShieldAlert className="w-8 h-8 stroke-[2.2]" />
+          </div>
+          <h2 className="font-display font-black text-2xl text-[#2B1810] uppercase tracking-tight">
+            Access Denied
+          </h2>
+          <p className="font-mono-code text-xs text-[#2B1810]/75">
+            Your user account does not possess administrator (isAdmin) or owner (isOwner) privileges in Firestore.
+          </p>
+          {onLogout && (
+            <button
+              onClick={onLogout}
+              className="mt-4 px-6 py-2.5 rounded-full bg-[#2B1810] text-white font-mono-code text-xs font-bold uppercase tracking-wider hover:bg-[#3E241A] transition cursor-pointer"
+            >
+              Sign Out & Return Home
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="py-8 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-8 animate-in fade-in duration-300">
       

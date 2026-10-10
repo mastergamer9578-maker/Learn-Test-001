@@ -2,51 +2,135 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Helper functions
-    function isAuthenticated() {
+    // ==========================================
+    // Core Identity & Authentication Helpers
+    // ==========================================
+    function isSignedIn() {
       return request.auth != null;
     }
 
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
     function isOwnerOfDoc(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
+      return isSignedIn() && request.auth.uid == userId;
     }
 
-    // Users Collection (Strict profile & role verification)
-    // Only authenticated staff/users can read profile documents; only owner or authenticated user can modify
-    match /users/{userId} {
-      allow read: if isAuthenticated();
-      allow write: if isAuthenticated() && (isOwnerOfDoc(userId) || request.auth.token.email_verified == true);
+    function incoming() {
+      return request.resource.data;
     }
 
-    // Products: Public menu browsing, but creation/updates/deletions require staff authentication
+    function existing() {
+      return resource.data;
+    }
+
+    // Role-Based Access Control (RBAC):
+    // Verifies admin or owner permissions in Firestore /users or /staff collections,
+    // requiring an active and email-verified session.
+    function isStaffOrAdmin() {
+      return isEmailVerified() && (
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true ||
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isOwner == true ||
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'owner')) ||
+        (exists(/databases/$(database)/documents/staff/$(request.auth.uid)) &&
+         (get(/databases/$(database)/documents/staff/$(request.auth.uid)).data.isAdmin == true ||
+          get(/databases/$(database)/documents/staff/$(request.auth.uid)).data.isOwner == true ||
+          get(/databases/$(database)/documents/staff/$(request.auth.uid)).data.role == 'admin' ||
+          get(/databases/$(database)/documents/staff/$(request.auth.uid)).data.role == 'owner')) ||
+        (request.auth.token.email == 'mastergamer9578@gmail.com')
+      );
+    }
+
+    // ==========================================
+    // Entity Schema Validators
+    // ==========================================
+    function isValidProduct(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() <= 150 &&
+             data.category is string && data.category.size() > 0 && data.category.size() <= 80 &&
+             data.price is number && data.price >= 0 &&
+             data.description is string && data.description.size() <= 1000 &&
+             data.image is string && data.image.size() <= 3000 &&
+             data.isAvailable is bool;
+    }
+
+    function isValidCategory(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() <= 100;
+    }
+
+    function isValidOrder(data) {
+      return data.customerName is string && data.customerName.size() > 0 && data.customerName.size() <= 120 &&
+             data.customerPhone is string && data.customerPhone.size() > 0 && data.customerPhone.size() <= 50 &&
+             data.customerAddress is string && data.customerAddress.size() > 0 && data.customerAddress.size() <= 300 &&
+             data.items is list && data.items.size() > 0 && data.items.size() <= 100 &&
+             data.total is number && data.total >= 0 &&
+             data.subtotal is number && data.subtotal >= 0 &&
+             data.deliveryFee is number && data.deliveryFee >= 0 &&
+             data.status is string && (
+               data.status == 'PENDING' ||
+               data.status == 'PREPARING' ||
+               data.status == 'READY' ||
+               data.status == 'COMPLETED' ||
+               data.status == 'CANCELLED'
+             );
+    }
+
+    // ==========================================
+    // Collection Security Rules
+    // ==========================================
+
+    // Products: Public menu browsing, but mutations restricted to verified admins/owners
     match /products/{productId} {
       allow read: if true;
-      allow write: if isAuthenticated();
+      allow create: if isStaffOrAdmin() && isValidProduct(incoming());
+      allow update: if isStaffOrAdmin();
+      allow delete: if isStaffOrAdmin();
     }
 
-    // Categories: Public menu navigation, modifications require staff authentication
+    // Categories: Public menu navigation, management restricted to verified admins/owners
     match /categories/{categoryId} {
       allow read: if true;
-      allow write: if isAuthenticated();
+      allow create: if isStaffOrAdmin() && isValidCategory(incoming());
+      allow update: if isStaffOrAdmin();
+      allow delete: if isStaffOrAdmin();
     }
 
-    // Orders: Anyone can place a validated order, but live queue read/status updates require staff authentication
+    // Orders: Anyone can submit a new validated order in 'PENDING' status,
+    // but reading the live order queue (PII: address, phone) or updating status is restricted to admins/owners
     match /orders/{orderId} {
-      allow create: if request.resource.data.customerName is string &&
-                    request.resource.data.items is list &&
-                    request.resource.data.total is number;
-      allow read, update, delete: if isAuthenticated();
+      allow create: if isValidOrder(incoming()) && incoming().status == 'PENDING';
+      allow read: if isStaffOrAdmin();
+      allow update: if isStaffOrAdmin();
+      allow delete: if isStaffOrAdmin();
     }
 
-    // Store Settings: Public storefront reads, but updates require staff authentication
+    // Store Settings: Public storefront reads, modifications restricted to verified admins/owners
     match /settings/{settingId} {
       allow read: if true;
-      allow write: if isAuthenticated();
+      allow write: if isStaffOrAdmin();
+    }
+
+    // Users Collection: Profiles & RBAC claims
+    // - Only the owner of the document or an admin can read the profile (prevents PII harvesting)
+    // - Regular users cannot grant themselves admin/owner privileges on creation or update
+    match /users/{userId} {
+      allow read: if isOwnerOfDoc(userId) || isStaffOrAdmin();
+      allow create: if isSignedIn() && (isOwnerOfDoc(userId) || isStaffOrAdmin()) &&
+                     (!('isAdmin' in incoming()) || incoming().isAdmin == false || isStaffOrAdmin()) &&
+                     (!('isOwner' in incoming()) || incoming().isOwner == false || isStaffOrAdmin()) &&
+                     (!('role' in incoming()) || incoming().role != 'admin' || isStaffOrAdmin());
+      allow update: if isStaffOrAdmin() ||
+                     (isOwnerOfDoc(userId) &&
+                      !incoming().diff(existing()).affectedKeys().hasAny(['isAdmin', 'isOwner', 'role']));
+      allow delete: if isStaffOrAdmin();
     }
 
     // Staff Collection (Protected internal staff metadata)
     match /staff/{staffId} {
-      allow read, write: if isAuthenticated();
+      allow read: if isStaffOrAdmin() || (isSignedIn() && request.auth.uid == staffId);
+      allow write: if isStaffOrAdmin();
     }
 
     // Default deny-all catch-all rule

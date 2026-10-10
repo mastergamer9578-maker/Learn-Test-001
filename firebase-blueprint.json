@@ -7,8 +7,9 @@
       "properties": {
         "id": { "type": "string" },
         "name": { "type": "string" },
-        "category": { "type": "string", "enum": ["BURGERS", "PIZZAS", "FAST FOOD", "DEALS"] },
+        "category": { "type": "string", "enum": ["BURGERS", "PIZZAS", "FAST FOOD", "DEALS", "DRINKS"] },
         "price": { "type": "number" },
+        "originalPrice": { "type": "number" },
         "description": { "type": "string" },
         "image": { "type": "string" },
         "tag": { "type": "string" },
@@ -34,6 +35,44 @@
         "notes": { "type": "string" }
       },
       "required": ["id", "customerName", "customerPhone", "customerAddress", "items", "subtotal", "deliveryFee", "total", "status", "createdAt"]
+    },
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile with role definitions (admin, owner, staff)",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "name": { "type": "string" },
+        "role": { "type": "string", "enum": ["owner", "admin", "staff", "customer"] },
+        "isAdmin": { "type": "boolean" },
+        "isOwner": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["uid", "email"]
+    },
+    "CategoryDetail": {
+      "title": "CategoryDetail",
+      "description": "Category with custom banner image and promotional tagline",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "bannerImage": { "type": "string" },
+        "tagline": { "type": "string" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["name"]
+    },
+    "StoreSettings": {
+      "title": "StoreSettings",
+      "description": "Global operational settings including banner and fees",
+      "type": "object",
+      "properties": {
+        "heroImage": { "type": "string" },
+        "storeStatus": { "type": "string", "enum": ["ACCEPTING", "BUSY", "PAUSED"] },
+        "deliverySettings": { "type": "object" }
+      }
     }
   },
   "firestore": {
@@ -42,6 +81,7 @@
       "description": "Collection of menu items for Shan Fast Food"
     },
     "/categories/{categoryId}": {
+      "schema": "CategoryDetail",
       "description": "Store menu category taxonomy"
     },
     "/orders/{orderId}": {
@@ -49,13 +89,16 @@
       "description": "Collection of live incoming and completed customer orders"
     },
     "/users/{userId}": {
+      "schema": "UserProfile",
       "description": "Staff and user profiles with role permissions (isAdmin, isOwner)"
     },
     "/settings/{settingId}": {
+      "schema": "StoreSettings",
       "description": "Store settings including store status, hero banner, and delivery rules"
     },
     "/staff/{staffId}": {
-      "description": "Staff collection for legacy role verification"
+      "schema": "UserProfile",
+      "description": "Staff collection for role verification"
     }
   }
 }

@@ -10,6 +10,7 @@ import {
   ArrowLeft,
   Send,
   RefreshCw,
+  Clock,
 } from 'lucide-react';
 import {
   signInWithEmailAndPassword,
@@ -20,7 +21,7 @@ import {
 import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 import { StaffUser } from '../types';
-import { sanitizeString, checkRateLimit } from '../utils/security';
+import { sanitizeString, checkRateLimit, useLoginLockout } from '../utils/security';
 
 interface StaffAccessModalProps {
   isOpen: boolean;
@@ -42,6 +43,19 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
   const [isCheckingStatus, setIsCheckingStatus] = useState(false);
   const [unverifiedUser, setUnverifiedUser] = useState<FirebaseUser | null>(null);
   const [unverifiedEmail, setUnverifiedEmail] = useState<string>('');
+
+  // Client-side rate limiting & 25-minute temporary lockout suite
+  const {
+    lockoutState,
+    recordFailure,
+    recordSuccess,
+    handleFirebaseTooManyRequests,
+    isLocked,
+    formattedTimeRemaining,
+    failedAttempts,
+    maxAttempts,
+    remainingAttempts,
+  } = useLoginLockout(staffId);
 
   const getFriendlyErrorMessage = (authErr: any): string => {
     if (!authErr) return 'Authentication failed. Please verify credentials in Firebase.';
@@ -172,6 +186,7 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
       setStaffId('');
       setPassword('');
       setUnverifiedUser(null);
+      recordSuccess();
       onSuccess(authenticatedUser);
     } catch (e: any) {
       console.error('[StaffAccess] Error verifying permissions in Firestore:', e);
@@ -192,6 +207,14 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
       return;
     }
 
+    // Client-side lockout guard: enforce 25-minute cooldown after 3 consecutive failures
+    if (isLocked) {
+      setError(
+        `Account temporarily locked out for security due to ${failedAttempts} consecutive failed login attempts. Please wait ${formattedTimeRemaining} before trying again.`
+      );
+      return;
+    }
+
     // Rate limiting: maximum 5 login attempts per 60 seconds
     const rateCheck = checkRateLimit('staff_login_attempt', 5, 60);
     if (!rateCheck.allowed) {
@@ -209,6 +232,7 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
       let isVerified = false;
       let specificAuthError: string | null = null;
       let targetUserCred: any = null;
+      let lastAliasError: any = null;
 
       // 1. Direct Firebase Authentication via signInWithEmailAndPassword
       if (cleanId.includes('@')) {
@@ -229,7 +253,7 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
           `${cleanId.toLowerCase()}@shan-fast-foods.firebaseapp.com`,
         ];
 
-        let lastAliasError: any = null;
+        lastAliasError = null;
         for (const alias of emailAliases) {
           try {
             const userCred = await signInWithEmailAndPassword(authInstance, alias, cleanPass);
@@ -338,6 +362,7 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
                       role: isOwner ? 'owner' : 'admin',
                     };
                     setError(null);
+                    recordSuccess();
                     onSuccess(authenticatedUser);
                     return;
                   }
@@ -351,14 +376,53 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
         }
       }
 
-      // If not authenticated via Firebase Auth or verified Firestore record, deny access
-      setError(
-        specificAuthError ||
-          'Authentication failed. Invalid email/password or account not authorized.'
-      );
+      // If not authenticated via Firebase Auth or verified Firestore record, deny access and record failure
+      const isRateLimitError =
+        lastAliasError?.code === 'auth/too-many-requests' ||
+        (cleanId.includes('@') && specificAuthError?.includes('too many failed attempts'));
+
+      if (isRateLimitError) {
+        const locked = handleFirebaseTooManyRequests();
+        setError(
+          `Firebase Security Lockout: Access temporarily disabled due to too many failed attempts. A 25-minute lockout is active for account protection (${locked.formattedTimeRemaining} remaining).`
+        );
+      } else {
+        const failureState = recordFailure();
+        if (failureState.isLocked) {
+          setError(
+            `Account temporarily locked out! You have reached ${failureState.maxAttempts} consecutive failed login attempts. Further attempts are blocked for 25 minutes (${failureState.formattedTimeRemaining} remaining).`
+          );
+        } else {
+          setError(
+            `${
+              specificAuthError || 'Authentication failed. Invalid email/password or account not authorized.'
+            } (Attempt ${failureState.failedAttempts} of ${failureState.maxAttempts}. ${failureState.remainingAttempts} attempt${
+              failureState.remainingAttempts === 1 ? '' : 's'
+            } remaining before a 25-minute temporary lockout.)`
+          );
+        }
+      }
     } catch (err: any) {
       console.error('[StaffAccess] Authentication exception:', err);
-      setError(getFriendlyErrorMessage(err));
+      if (err?.code === 'auth/too-many-requests') {
+        const locked = handleFirebaseTooManyRequests();
+        setError(
+          `Firebase Security Lockout: Access temporarily disabled due to too many failed attempts. A 25-minute lockout is active for account protection (${locked.formattedTimeRemaining} remaining).`
+        );
+      } else {
+        const failureState = recordFailure();
+        if (failureState.isLocked) {
+          setError(
+            `Account temporarily locked out! You have reached ${failureState.maxAttempts} consecutive failed login attempts. Further attempts are blocked for 25 minutes (${failureState.formattedTimeRemaining} remaining).`
+          );
+        } else {
+          setError(
+            `${getFriendlyErrorMessage(err)} (Attempt ${failureState.failedAttempts} of ${failureState.maxAttempts}. ${failureState.remainingAttempts} attempt${
+              failureState.remainingAttempts === 1 ? '' : 's'
+            } remaining before a 25-minute lockout.)`
+          );
+        }
+      }
     } finally {
       setIsLoading(false);
     }
@@ -607,6 +671,36 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
               </div>
             )}
 
+            {/* Real-time 25-minute Lockout Alert Banner */}
+            {isLocked && (
+              <div className="p-3.5 rounded-2xl bg-amber-500/15 border-2 border-amber-600/70 text-[#2B1810] text-xs font-mono-code space-y-2 animate-in shake duration-300">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 font-bold text-amber-900 uppercase tracking-wide">
+                    <Clock className="w-4 h-4 text-amber-700 animate-spin" style={{ animationDuration: '6s' }} />
+                    <span>Temporary Lockout Active</span>
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full bg-red-600 text-white text-[10px] font-bold">
+                    {failedAttempts}/{maxAttempts} Failures
+                  </span>
+                </div>
+
+                <p className="text-[11px] text-[#2B1810]/85 leading-relaxed">
+                  {lockoutState.isFirebaseTooManyRequests
+                    ? 'Firebase Authentication detected excessive login attempts and paused requests to prevent unauthorized access.'
+                    : `Account locked after ${maxAttempts} consecutive failed login attempts. Access is temporarily blocked for 25 minutes.`}
+                </p>
+
+                <div className="flex items-center justify-between pt-1.5 border-t border-amber-600/30">
+                  <span className="text-amber-950 font-bold text-[11px] uppercase tracking-wider">
+                    Time Remaining:
+                  </span>
+                  <span className="px-2.5 py-0.5 rounded-lg bg-amber-900 text-amber-100 font-mono font-bold text-xs tracking-wider">
+                    ⏳ {formattedTimeRemaining}
+                  </span>
+                </div>
+              </div>
+            )}
+
             {/* Error Alert */}
             {error && (
               <div className="p-3 rounded-xl bg-red-100 text-red-900 border border-red-300 font-mono-code text-xs flex items-start gap-2">
@@ -619,9 +713,16 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
             <form onSubmit={handleSignIn} className="space-y-4">
               {/* Email / ID Field */}
               <div>
-                <label className="block text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#2B1810]/80 uppercase mb-1.5">
-                  STAFF EMAIL OR ID *
-                </label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#2B1810]/80 uppercase">
+                    STAFF EMAIL OR ID *
+                  </label>
+                  {!isLocked && failedAttempts > 0 && (
+                    <span className="text-[10px] font-mono-code text-amber-700 font-bold">
+                      {failedAttempts}/{maxAttempts} Attempts Used
+                    </span>
+                  )}
+                </div>
                 <div className="relative">
                   <input
                     type="text"
@@ -669,13 +770,22 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
               {/* Submit Button */}
               <button
                 type="submit"
-                disabled={isLoading}
-                className="w-full py-3.5 rounded-full bg-[#2B1810] hover:bg-[#3E241A] text-white font-mono-code text-xs uppercase font-bold tracking-wider transition-all active:scale-95 shadow-md flex items-center justify-center gap-2 cursor-pointer mt-2 disabled:opacity-70 disabled:cursor-not-allowed"
+                disabled={isLoading || isLocked}
+                className={`w-full py-3.5 rounded-full ${
+                  isLocked
+                    ? 'bg-amber-900/60 text-white/80 cursor-not-allowed'
+                    : 'bg-[#2B1810] hover:bg-[#3E241A] text-white cursor-pointer active:scale-95'
+                } font-mono-code text-xs uppercase font-bold tracking-wider transition-all shadow-md flex items-center justify-center gap-2 mt-2 disabled:opacity-70 disabled:cursor-not-allowed`}
               >
                 {isLoading ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
                     <span>AUTHENTICATING WITH FIREBASE...</span>
+                  </>
+                ) : isLocked ? (
+                  <>
+                    <Clock className="w-4 h-4 animate-spin" style={{ animationDuration: '6s' }} />
+                    <span>LOCKED OUT ({formattedTimeRemaining})</span>
                   </>
                 ) : (
                   <>

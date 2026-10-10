@@ -244,3 +244,6 @@ export function checkRolePermission(
 
   return { allowed: true };
 }
+
+// Re-export Login Rate Limiting & Lockout Suite
+export * from './loginLockout';

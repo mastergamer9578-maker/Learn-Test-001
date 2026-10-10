@@ -12,6 +12,7 @@ import {
   RefreshCw,
   Eye,
   EyeOff,
+  Clock,
 } from 'lucide-react';
 import {
   signInWithEmailAndPassword,
@@ -22,7 +23,7 @@ import {
 import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 import { StaffUser } from '../types';
-import { sanitizeString, checkRateLimit } from '../utils/security';
+import { sanitizeString, checkRateLimit, useLoginLockout } from '../utils/security';
 
 interface ProtectedAuthGuardProps {
   attemptedPath: string;
@@ -46,6 +47,19 @@ export const ProtectedAuthGuard: React.FC<ProtectedAuthGuardProps> = ({
   const [isResending, setIsResending] = useState(false);
   const [unverifiedUser, setUnverifiedUser] = useState<FirebaseUser | null>(null);
   const [unverifiedEmail, setUnverifiedEmail] = useState<string>('');
+
+  // Client-side rate limiting & 25-minute temporary lockout suite
+  const {
+    lockoutState,
+    recordFailure,
+    recordSuccess,
+    handleFirebaseTooManyRequests,
+    isLocked,
+    formattedTimeRemaining,
+    failedAttempts,
+    maxAttempts,
+    remainingAttempts,
+  } = useLoginLockout(email);
 
   const getFriendlyErrorMessage = (authErr: any): string => {
     if (!authErr) return 'Authentication failed. Please verify credentials.';
