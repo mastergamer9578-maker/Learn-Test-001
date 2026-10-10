@@ -15,6 +15,7 @@ import { StaffDashboard } from './components/StaffDashboard';
 import { StoryModal } from './components/StoryModal';
 import { ContactModal } from './components/ContactModal';
 import { NotFoundPage } from './components/NotFoundPage';
+import { ProtectedAuthGuard } from './components/ProtectedAuthGuard';
 import { Footer } from './components/Footer';
 import { updatePageSEO, ROUTE_SEO } from './utils/seo';
 import {
@@ -40,6 +41,20 @@ import {
 
 export type AppRoute = 'home' | 'menu' | 'story' | 'contact' | 'staff' | 'not-found';
 
+export const isProtectedDashboardPath = (path: string): boolean => {
+  if (!path) return false;
+  const raw = path.toLowerCase().trim();
+  const clean = raw.length > 1 ? raw.replace(/\/+$/, '') : raw;
+  return (
+    clean === '/staff' ||
+    clean === '/admin' ||
+    clean === '/dashboard' ||
+    clean.startsWith('/staff/') ||
+    clean.startsWith('/admin/') ||
+    clean.startsWith('/dashboard/')
+  );
+};
+
 const resolveRoute = (pathname: string): { route: AppRoute; path: string } => {
   if (typeof window === 'undefined') return { route: 'home', path: '/' };
   const raw = (pathname || '/').toLowerCase().trim();
@@ -57,8 +72,8 @@ const resolveRoute = (pathname: string): { route: AppRoute; path: string } => {
   if (clean === '/contact' || clean === '/contact-us') {
     return { route: 'contact', path: '/contact' };
   }
-  if (clean === '/staff' || clean === '/admin') {
-    return { route: 'staff', path: '/staff' };
+  if (isProtectedDashboardPath(clean)) {
+    return { route: 'staff', path: clean };
   }
   return { route: 'not-found', path: pathname };
 };
@@ -78,24 +93,13 @@ export default function App() {
     return '/';
   });
 
-  // Storefront & Staff View State
-  const [currentView, setCurrentView] = useState<'customer' | 'staff'>(() => {
-    if (typeof window !== 'undefined') {
-      const initial = resolveRoute(window.location.pathname);
-      if (initial.route === 'staff') return 'staff';
-    }
-    return 'customer';
-  });
-  const [isStaffAuthenticated, setIsStaffAuthenticated] = useState<boolean>(() => {
-    return sessionStorage.getItem('shan_staff_auth') === 'true';
-  });
-  const [staffUser, setStaffUser] = useState<StaffUser | null>(() => {
-    try {
-      const saved = sessionStorage.getItem('shan_staff_user');
-      if (saved) return JSON.parse(saved);
-    } catch {}
-    return null;
-  });
+  // Strict Authentication Guard State (Firebase Auth onAuthStateChanged verification)
+  const [isAuthChecking, setIsAuthChecking] = useState<boolean>(true);
+  const [isStaffAuthenticated, setIsStaffAuthenticated] = useState<boolean>(false);
+  const [staffUser, setStaffUser] = useState<StaffUser | null>(null);
+
+  // Storefront & Staff View State (Secure: defaults to customer until Firebase verifies staff)
+  const [currentView, setCurrentView] = useState<'customer' | 'staff'>('customer');
 
   // Modals State
   const [isCartOpen, setIsCartOpen] = useState(false);
@@ -480,65 +484,83 @@ export default function App() {
   // 5. Dynamic sync of authenticated staff permissions directly from Firestore 'users' collection
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged(async (firebaseUser) => {
-      if (firebaseUser) {
-        if (!firebaseUser.emailVerified) {
+      try {
+        if (firebaseUser) {
+          if (!firebaseUser.emailVerified) {
+            setIsStaffAuthenticated(false);
+            setStaffUser(null);
+            try {
+              sessionStorage.removeItem('shan_staff_auth');
+              sessionStorage.removeItem('shan_staff_user');
+            } catch {}
+            return;
+          }
+          try {
+            let docSnap = await getDoc(doc(db, 'users', firebaseUser.uid));
+            if (!docSnap.exists()) {
+              const staffSnap = await getDoc(doc(db, 'staff', firebaseUser.uid));
+              if (staffSnap.exists()) docSnap = staffSnap;
+            }
+            if (docSnap.exists()) {
+              const data = docSnap.data();
+              const isOwner = Boolean(data?.isOwner === true || data?.role === 'owner');
+              const isAdmin = Boolean(data?.isAdmin === true || data?.role === 'admin' || isOwner);
+              if (isAdmin || isOwner) {
+                const authenticatedUser: StaffUser = {
+                  uid: firebaseUser.uid,
+                  email: firebaseUser.email || '',
+                  name: data?.name || data?.displayName || (isOwner ? 'Store Owner' : 'Store Administrator'),
+                  isAdmin,
+                  isOwner,
+                  role: isOwner ? 'owner' : 'admin',
+                };
+                setIsStaffAuthenticated(true);
+                setStaffUser(authenticatedUser);
+                try {
+                  sessionStorage.setItem('shan_staff_auth', 'true');
+                  sessionStorage.setItem('shan_staff_user', JSON.stringify(authenticatedUser));
+                } catch {}
+                if (isProtectedDashboardPath(window.location.pathname)) {
+                  setCurrentView('staff');
+                }
+              } else {
+                // User has no staff/owner roles assigned in Firestore
+                setIsStaffAuthenticated(false);
+                setStaffUser(null);
+                try {
+                  sessionStorage.removeItem('shan_staff_auth');
+                  sessionStorage.removeItem('shan_staff_user');
+                } catch {}
+                await signOut(auth);
+              }
+            } else {
+              // Profile document absent in Firestore
+              setIsStaffAuthenticated(false);
+              setStaffUser(null);
+              try {
+                sessionStorage.removeItem('shan_staff_auth');
+                sessionStorage.removeItem('shan_staff_user');
+              } catch {}
+            }
+          } catch (err) {
+            console.warn('[App] Firestore user role sync notice:', err);
+            setIsStaffAuthenticated(false);
+            setStaffUser(null);
+          }
+        } else {
+          // Firebase Auth user signed out or token expired: immediately clear staff authorization state
           setIsStaffAuthenticated(false);
           setStaffUser(null);
           try {
             sessionStorage.removeItem('shan_staff_auth');
             sessionStorage.removeItem('shan_staff_user');
           } catch {}
-          return;
-        }
-        try {
-          let docSnap = await getDoc(doc(db, 'users', firebaseUser.uid));
-          if (!docSnap.exists()) {
-            const staffSnap = await getDoc(doc(db, 'staff', firebaseUser.uid));
-            if (staffSnap.exists()) docSnap = staffSnap;
+          if (isProtectedDashboardPath(window.location.pathname)) {
+            setCurrentView('customer');
           }
-          if (docSnap.exists()) {
-            const data = docSnap.data();
-            const isOwner = Boolean(data?.isOwner === true || data?.role === 'owner');
-            const isAdmin = Boolean(data?.isAdmin === true || data?.role === 'admin' || isOwner);
-            if (isAdmin || isOwner) {
-              const authenticatedUser: StaffUser = {
-                uid: firebaseUser.uid,
-                email: firebaseUser.email || '',
-                name: data?.name || data?.displayName || (isOwner ? 'Store Owner' : 'Store Administrator'),
-                isAdmin,
-                isOwner,
-                role: isOwner ? 'owner' : 'admin',
-              };
-              setIsStaffAuthenticated(true);
-              setStaffUser(authenticatedUser);
-              sessionStorage.setItem('shan_staff_auth', 'true');
-              sessionStorage.setItem('shan_staff_user', JSON.stringify(authenticatedUser));
-            } else {
-              // User has no staff/owner roles assigned in Firestore
-              setIsStaffAuthenticated(false);
-              setStaffUser(null);
-              sessionStorage.removeItem('shan_staff_auth');
-              sessionStorage.removeItem('shan_staff_user');
-              await signOut(auth);
-            }
-          } else {
-            // Profile document absent in Firestore
-            setIsStaffAuthenticated(false);
-            setStaffUser(null);
-            sessionStorage.removeItem('shan_staff_auth');
-            sessionStorage.removeItem('shan_staff_user');
-          }
-        } catch (err) {
-          console.warn('[App] Firestore user role sync notice:', err);
         }
-      } else {
-        // Firebase Auth user signed out or token expired: immediately clear staff authorization state
-        setIsStaffAuthenticated(false);
-        setStaffUser(null);
-        try {
-          sessionStorage.removeItem('shan_staff_auth');
-          sessionStorage.removeItem('shan_staff_user');
-        } catch {}
+      } finally {
+        setIsAuthChecking(false);
       }
     });
     return () => unsubscribe();
@@ -622,15 +644,12 @@ export default function App() {
       setCurrentView('customer');
       setIsContactModalOpen(true);
       setIsStoryModalOpen(false);
-    } else if (route === 'staff') {
-      if (isStaffAuthenticated) {
-        if (auth.currentUser && !auth.currentUser.emailVerified) {
-          setIsStaffModalOpen(true);
-          return;
-        }
+    } else if (route === 'staff' || isProtectedDashboardPath(path)) {
+      if (isStaffAuthenticated && staffUser && auth.currentUser?.emailVerified) {
         setCurrentView('staff');
       } else {
-        setIsStaffModalOpen(true);
+        // Direct unauthenticated access is intercepted by the ProtectedAuthGuard
+        setCurrentView('customer');
       }
     } else if (route === 'not-found') {
       setIsStoryModalOpen(false);
@@ -662,18 +681,18 @@ export default function App() {
         setCurrentView('customer');
         setIsContactModalOpen(true);
         setIsStoryModalOpen(false);
-      } else if (route === 'staff') {
-        if (isStaffAuthenticated) {
+      } else if (route === 'staff' || isProtectedDashboardPath(path)) {
+        if (isStaffAuthenticated && staffUser && auth.currentUser?.emailVerified) {
           setCurrentView('staff');
         } else {
-          setIsStaffModalOpen(true);
+          setCurrentView('customer');
         }
       }
     };
 
     window.addEventListener('popstate', handlePopState);
 
-    // Initial mount action if URL has deep path
+    // Initial mount action if URL has public deep path
     const initial = resolveRoute(window.location.pathname);
     if (initial.route === 'menu') {
       setTimeout(scrollToMenu, 350);
@@ -681,16 +700,10 @@ export default function App() {
       setIsStoryModalOpen(true);
     } else if (initial.route === 'contact') {
       setIsContactModalOpen(true);
-    } else if (initial.route === 'staff') {
-      if (isStaffAuthenticated) {
-        setCurrentView('staff');
-      } else {
-        setIsStaffModalOpen(true);
-      }
     }
 
     return () => window.removeEventListener('popstate', handlePopState);
-  }, [isStaffAuthenticated]);
+  }, [isStaffAuthenticated, staffUser]);
 
   // Cart Operations
   const handleAddToCart = (item: MenuItem, quantity: number = 1) => {
@@ -932,7 +945,13 @@ export default function App() {
     <div className="min-h-screen flex flex-col bg-[#F5EFEB] text-[#2B1810] selection:bg-[#DE8030] selection:text-[#2B1810]">
       {/* Top Navbar with Enhanced Route Navigation */}
       <Navbar
-        currentView={currentRoute === 'not-found' ? 'not-found' : currentView}
+        currentView={
+          currentRoute === 'not-found'
+            ? 'not-found'
+            : isStaffAuthenticated && staffUser && currentView === 'staff'
+            ? 'staff'
+            : 'customer'
+        }
         onSwitchView={handleRequestSwitchView}
         cartCount={totalCartCount}
         onOpenCart={() => setIsCartOpen(true)}
@@ -942,7 +961,7 @@ export default function App() {
         onNavigate={navigate}
       />
 
-      {/* Main View Router */}
+      {/* Main View Router with Strict Protected Route Guard */}
       <main className="flex-grow">
         {currentRoute === 'not-found' ? (
           /* Branded 404 Not Found Page */
@@ -953,7 +972,52 @@ export default function App() {
             onOpenContact={() => navigate('/contact')}
             attemptedPath={attemptedPath}
           />
-        ) : currentView === 'customer' ? (
+        ) : isProtectedDashboardPath(attemptedPath) || currentRoute === 'staff' || currentView === 'staff' ? (
+          /* Strict Protected Route Guard: /admin, /staff, /dashboard */
+          isAuthChecking ? (
+            <ProtectedAuthGuard
+              attemptedPath={attemptedPath}
+              isAuthChecking={true}
+              onSuccess={handleStaffAuthSuccess}
+              onGoHome={() => navigate('/')}
+            />
+          ) : isStaffAuthenticated && staffUser && auth.currentUser && auth.currentUser.emailVerified ? (
+            /* Verified Staff & Admin Management Dashboard */
+            <StaffDashboard
+              menuItems={menuItems}
+              categories={categories}
+              categoryDetails={categoryDetails}
+              onUpdateCategories={handleUpdateCategories}
+              onSaveCategoryWithBanner={handleSaveCategoryWithBanner}
+              onDeleteCategory={handleDeleteCategory}
+              deliverySettings={deliverySettings}
+              onUpdateDeliverySettings={handleUpdateDeliverySettings}
+              onAddMenuItem={handleAddMenuItem}
+              onEditMenuItem={handleEditMenuItem}
+              onToggleMenuItem={handleToggleMenuItem}
+              onDeleteMenuItem={handleDeleteMenuItem}
+              orders={orders}
+              onUpdateOrderStatus={handleUpdateOrderStatus}
+              storeStatus={storeStatus}
+              onToggleStoreStatus={handleToggleStoreStatus}
+              onSetStoreStatus={handleSetStoreStatus}
+              heroImage={heroImage}
+              onUpdateHeroImage={handleUpdateHeroImage}
+              isOwner={Boolean(staffUser?.isOwner)}
+              isAdmin={Boolean(staffUser?.isAdmin)}
+              staffUser={staffUser || undefined}
+              onLogout={handleStaffLogout}
+            />
+          ) : (
+            /* Unauthorized Access Blocked: Enforce Login Screen */
+            <ProtectedAuthGuard
+              attemptedPath={attemptedPath}
+              isAuthChecking={false}
+              onSuccess={handleStaffAuthSuccess}
+              onGoHome={() => navigate('/')}
+            />
+          )
+        ) : (
           <>
             {/* Customer Storefront: Hero Section */}
             <Hero
@@ -971,33 +1035,6 @@ export default function App() {
               isLoading={isLoadingMenu}
             />
           </>
-        ) : (
-          /* Staff Management Dashboard */
-          <StaffDashboard
-            menuItems={menuItems}
-            categories={categories}
-            categoryDetails={categoryDetails}
-            onUpdateCategories={handleUpdateCategories}
-            onSaveCategoryWithBanner={handleSaveCategoryWithBanner}
-            onDeleteCategory={handleDeleteCategory}
-            deliverySettings={deliverySettings}
-            onUpdateDeliverySettings={handleUpdateDeliverySettings}
-            onAddMenuItem={handleAddMenuItem}
-            onEditMenuItem={handleEditMenuItem}
-            onToggleMenuItem={handleToggleMenuItem}
-            onDeleteMenuItem={handleDeleteMenuItem}
-            orders={orders}
-            onUpdateOrderStatus={handleUpdateOrderStatus}
-            storeStatus={storeStatus}
-            onToggleStoreStatus={handleToggleStoreStatus}
-            onSetStoreStatus={handleSetStoreStatus}
-            heroImage={heroImage}
-            onUpdateHeroImage={handleUpdateHeroImage}
-            isOwner={Boolean(staffUser?.isOwner)}
-            isAdmin={Boolean(staffUser?.isAdmin)}
-            staffUser={staffUser || undefined}
-            onLogout={handleStaffLogout}
-          />
         )}
       </main>
 
