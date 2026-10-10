@@ -1,0 +1,16 @@
+# Robots.txt for Shan Fast Food
+# Website: https://restaurant-web0.vercel.app
+
+User-agent: *
+Allow: /
+Allow: /menu
+Allow: /our-story
+Allow: /contact
+
+# Disallow private administration, staff portal, and internal endpoints
+Disallow: /staff
+Disallow: /admin
+Disallow: /api/
+
+# Sitemap location
+Sitemap: https://restaurant-web0.vercel.app/sitemap.xml

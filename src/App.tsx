@@ -14,7 +14,9 @@ import { StaffAccessModal } from './components/StaffAccessModal';
 import { StaffDashboard } from './components/StaffDashboard';
 import { StoryModal } from './components/StoryModal';
 import { ContactModal } from './components/ContactModal';
+import { NotFoundPage } from './components/NotFoundPage';
 import { Footer } from './components/Footer';
+import { updatePageSEO, ROUTE_SEO } from './utils/seo';
 import {
   subscribeToMenuItems,
   fetchMenuItemsOnce,
@@ -36,9 +38,54 @@ import {
   initializeFirestoreCollections,
 } from './services/firestoreService';
 
+export type AppRoute = 'home' | 'menu' | 'story' | 'contact' | 'staff' | 'not-found';
+
+const resolveRoute = (pathname: string): { route: AppRoute; path: string } => {
+  if (typeof window === 'undefined') return { route: 'home', path: '/' };
+  const raw = (pathname || '/').toLowerCase().trim();
+  const clean = raw.length > 1 ? raw.replace(/\/+$/, '') : raw;
+
+  if (clean === '/' || clean === '' || clean === '/index.html') {
+    return { route: 'home', path: '/' };
+  }
+  if (clean === '/menu') {
+    return { route: 'menu', path: '/menu' };
+  }
+  if (clean === '/our-story' || clean === '/story' || clean === '/about') {
+    return { route: 'story', path: '/our-story' };
+  }
+  if (clean === '/contact' || clean === '/contact-us') {
+    return { route: 'contact', path: '/contact' };
+  }
+  if (clean === '/staff' || clean === '/admin') {
+    return { route: 'staff', path: '/staff' };
+  }
+  return { route: 'not-found', path: pathname };
+};
+
 export default function App() {
+  // Client-Side Routing & View State
+  const [currentRoute, setCurrentRoute] = useState<AppRoute>(() => {
+    if (typeof window !== 'undefined') {
+      return resolveRoute(window.location.pathname).route;
+    }
+    return 'home';
+  });
+  const [attemptedPath, setAttemptedPath] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return window.location.pathname;
+    }
+    return '/';
+  });
+
   // Storefront & Staff View State
-  const [currentView, setCurrentView] = useState<'customer' | 'staff'>('customer');
+  const [currentView, setCurrentView] = useState<'customer' | 'staff'>(() => {
+    if (typeof window !== 'undefined') {
+      const initial = resolveRoute(window.location.pathname);
+      if (initial.route === 'staff') return 'staff';
+    }
+    return 'customer';
+  });
   const [isStaffAuthenticated, setIsStaffAuthenticated] = useState<boolean>(() => {
     return sessionStorage.getItem('shan_staff_auth') === 'true';
   });
@@ -522,6 +569,129 @@ export default function App() {
     localStorage.setItem('shan_orders', JSON.stringify(orders));
   }, [orders]);
 
+  // Dynamic SEO Synchronization
+  useEffect(() => {
+    if (currentRoute === 'home') {
+      updatePageSEO(ROUTE_SEO.home);
+    } else if (currentRoute === 'menu') {
+      updatePageSEO(ROUTE_SEO.menu);
+    } else if (currentRoute === 'story') {
+      updatePageSEO(ROUTE_SEO.story);
+    } else if (currentRoute === 'contact') {
+      updatePageSEO(ROUTE_SEO.contact);
+    } else if (currentRoute === 'staff') {
+      updatePageSEO(ROUTE_SEO.staff);
+    } else if (currentRoute === 'not-found') {
+      updatePageSEO(ROUTE_SEO.notFound);
+    }
+  }, [currentRoute]);
+
+  const scrollToMenu = () => {
+    const menuEl = document.getElementById('menu-section');
+    if (menuEl) {
+      menuEl.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
+
+  // Client-Side Router Navigation Handler
+  const navigate = (targetPath: string) => {
+    if (typeof window !== 'undefined') {
+      window.history.pushState(null, '', targetPath);
+    }
+    const { route, path } = resolveRoute(targetPath);
+    setCurrentRoute(route);
+    setAttemptedPath(path);
+
+    if (route === 'home') {
+      setCurrentView('customer');
+      setIsStoryModalOpen(false);
+      setIsContactModalOpen(false);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } else if (route === 'menu') {
+      setCurrentView('customer');
+      setIsStoryModalOpen(false);
+      setIsContactModalOpen(false);
+      setTimeout(() => {
+        scrollToMenu();
+      }, 100);
+    } else if (route === 'story') {
+      setCurrentView('customer');
+      setIsStoryModalOpen(true);
+      setIsContactModalOpen(false);
+    } else if (route === 'contact') {
+      setCurrentView('customer');
+      setIsContactModalOpen(true);
+      setIsStoryModalOpen(false);
+    } else if (route === 'staff') {
+      if (isStaffAuthenticated) {
+        if (auth.currentUser && !auth.currentUser.emailVerified) {
+          setIsStaffModalOpen(true);
+          return;
+        }
+        setCurrentView('staff');
+      } else {
+        setIsStaffModalOpen(true);
+      }
+    } else if (route === 'not-found') {
+      setIsStoryModalOpen(false);
+      setIsContactModalOpen(false);
+    }
+  };
+
+  // Browser History (Popstate) & Initial Mount Route Dispatch
+  useEffect(() => {
+    const handlePopState = () => {
+      const { route, path } = resolveRoute(window.location.pathname);
+      setCurrentRoute(route);
+      setAttemptedPath(path);
+
+      if (route === 'home') {
+        setCurrentView('customer');
+        setIsStoryModalOpen(false);
+        setIsContactModalOpen(false);
+      } else if (route === 'menu') {
+        setCurrentView('customer');
+        setIsStoryModalOpen(false);
+        setIsContactModalOpen(false);
+        setTimeout(scrollToMenu, 100);
+      } else if (route === 'story') {
+        setCurrentView('customer');
+        setIsStoryModalOpen(true);
+        setIsContactModalOpen(false);
+      } else if (route === 'contact') {
+        setCurrentView('customer');
+        setIsContactModalOpen(true);
+        setIsStoryModalOpen(false);
+      } else if (route === 'staff') {
+        if (isStaffAuthenticated) {
+          setCurrentView('staff');
+        } else {
+          setIsStaffModalOpen(true);
+        }
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+
+    // Initial mount action if URL has deep path
+    const initial = resolveRoute(window.location.pathname);
+    if (initial.route === 'menu') {
+      setTimeout(scrollToMenu, 350);
+    } else if (initial.route === 'story') {
+      setIsStoryModalOpen(true);
+    } else if (initial.route === 'contact') {
+      setIsContactModalOpen(true);
+    } else if (initial.route === 'staff') {
+      if (isStaffAuthenticated) {
+        setCurrentView('staff');
+      } else {
+        setIsStaffModalOpen(true);
+      }
+    }
+
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [isStaffAuthenticated]);
+
   // Cart Operations
   const handleAddToCart = (item: MenuItem, quantity: number = 1) => {
     setCart((prev) => {
@@ -602,18 +772,9 @@ export default function App() {
   // Staff Authentication & View Switching
   const handleRequestSwitchView = (targetView: 'customer' | 'staff') => {
     if (targetView === 'staff') {
-      if (isStaffAuthenticated) {
-        // Double check email verification if logged in with Firebase Auth
-        if (auth.currentUser && !auth.currentUser.emailVerified) {
-          setIsStaffModalOpen(true);
-          return;
-        }
-        setCurrentView('staff');
-      } else {
-        setIsStaffModalOpen(true);
-      }
+      navigate('/staff');
     } else {
-      setCurrentView('customer');
+      navigate('/');
     }
   };
 
@@ -625,7 +786,11 @@ export default function App() {
       sessionStorage.setItem('shan_staff_user', JSON.stringify(user));
     } catch {}
     setIsStaffModalOpen(false);
+    setCurrentRoute('staff');
     setCurrentView('staff');
+    if (typeof window !== 'undefined' && window.location.pathname !== '/staff') {
+      window.history.pushState(null, '', '/staff');
+    }
   };
 
   const handleStaffLogout = async () => {
@@ -638,7 +803,7 @@ export default function App() {
     } catch (e) {
       console.warn('[Auth] Sign out notice:', e);
     }
-    setCurrentView('customer');
+    navigate('/');
   };
 
   // Staff Menu Item Management (Synced to Firestore 'products' collection - Owner Only)
@@ -763,35 +928,38 @@ export default function App() {
     }
   };
 
-  const scrollToMenu = () => {
-    const menuEl = document.getElementById('menu-section');
-    if (menuEl) {
-      menuEl.scrollIntoView({ behavior: 'smooth' });
-    }
-  };
-
   return (
     <div className="min-h-screen flex flex-col bg-[#F5EFEB] text-[#2B1810] selection:bg-[#DE8030] selection:text-[#2B1810]">
-      {/* Top Navbar */}
+      {/* Top Navbar with Enhanced Route Navigation */}
       <Navbar
-        currentView={currentView}
+        currentView={currentRoute === 'not-found' ? 'not-found' : currentView}
         onSwitchView={handleRequestSwitchView}
         cartCount={totalCartCount}
         onOpenCart={() => setIsCartOpen(true)}
-        onOpenStory={() => setIsStoryModalOpen(true)}
-        onOpenContact={() => setIsContactModalOpen(true)}
+        onOpenStory={() => navigate('/our-story')}
+        onOpenContact={() => navigate('/contact')}
         onScrollToMenu={scrollToMenu}
+        onNavigate={navigate}
       />
 
       {/* Main View Router */}
       <main className="flex-grow">
-        {currentView === 'customer' ? (
+        {currentRoute === 'not-found' ? (
+          /* Branded 404 Not Found Page */
+          <NotFoundPage
+            onGoHome={() => navigate('/')}
+            onGoMenu={() => navigate('/menu')}
+            onOpenStory={() => navigate('/our-story')}
+            onOpenContact={() => navigate('/contact')}
+            attemptedPath={attemptedPath}
+          />
+        ) : currentView === 'customer' ? (
           <>
             {/* Customer Storefront: Hero Section */}
             <Hero
               heroImage={heroImage}
-              onOrderOnline={scrollToMenu}
-              onExploreSignature={scrollToMenu}
+              onOrderOnline={() => navigate('/menu')}
+              onExploreSignature={() => navigate('/menu')}
             />
 
             {/* Customer Storefront: Menu Section with Filters & Search */}
@@ -833,12 +1001,13 @@ export default function App() {
         )}
       </main>
 
-      {/* Footer */}
+      {/* Footer with Semantic Internal Linking */}
       <Footer
-        onOpenStory={() => setIsStoryModalOpen(true)}
-        onOpenContact={() => setIsContactModalOpen(true)}
-        onOpenStaff={() => handleRequestSwitchView('staff')}
-        onScrollToMenu={scrollToMenu}
+        onOpenStory={() => navigate('/our-story')}
+        onOpenContact={() => navigate('/contact')}
+        onOpenStaff={() => navigate('/staff')}
+        onScrollToMenu={() => navigate('/menu')}
+        onNavigate={navigate}
       />
 
       {/* Modals & Drawers */}
@@ -871,17 +1040,41 @@ export default function App() {
 
       <StoryModal
         isOpen={isStoryModalOpen}
-        onClose={() => setIsStoryModalOpen(false)}
+        onClose={() => {
+          setIsStoryModalOpen(false);
+          if (currentRoute === 'story') {
+            if (typeof window !== 'undefined') {
+              window.history.replaceState(null, '', '/');
+            }
+            setCurrentRoute('home');
+          }
+        }}
       />
 
       <ContactModal
         isOpen={isContactModalOpen}
-        onClose={() => setIsContactModalOpen(false)}
+        onClose={() => {
+          setIsContactModalOpen(false);
+          if (currentRoute === 'contact') {
+            if (typeof window !== 'undefined') {
+              window.history.replaceState(null, '', '/');
+            }
+            setCurrentRoute('home');
+          }
+        }}
       />
 
       <StaffAccessModal
         isOpen={isStaffModalOpen}
-        onClose={() => setIsStaffModalOpen(false)}
+        onClose={() => {
+          setIsStaffModalOpen(false);
+          if (currentRoute === 'staff' && !isStaffAuthenticated) {
+            if (typeof window !== 'undefined') {
+              window.history.replaceState(null, '', '/');
+            }
+            setCurrentRoute('home');
+          }
+        }}
         onSuccess={handleStaffAuthSuccess}
       />
     </div>

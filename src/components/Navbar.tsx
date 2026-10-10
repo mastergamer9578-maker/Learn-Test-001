@@ -2,13 +2,14 @@ import React, { useState } from 'react';
 import { ShoppingBag, UtensilsCrossed, Menu as MenuIcon, X } from 'lucide-react';
 
 interface NavbarProps {
-  currentView: 'customer' | 'staff';
+  currentView: 'customer' | 'staff' | 'not-found';
   onSwitchView: (view: 'customer' | 'staff') => void;
   cartCount: number;
   onOpenCart: () => void;
   onOpenStory: () => void;
   onOpenContact: () => void;
   onScrollToMenu: () => void;
+  onNavigate?: (path: string) => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -19,6 +20,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenStory,
   onOpenContact,
   onScrollToMenu,
+  onNavigate,
 }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -26,10 +28,12 @@ export const Navbar: React.FC<NavbarProps> = ({
     <header className="sticky top-0 z-40 bg-[#F5EFEB]/90 backdrop-blur-md border-b border-[#2B1810]/10 transition-colors">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
         
-        {/* Brand Logo & Live Store Status Indicator */}
+        {/* Brand Logo & Home Navigation */}
         <div 
           onClick={() => {
-            if (currentView === 'staff') {
+            if (onNavigate) {
+              onNavigate('/');
+            } else if (currentView === 'staff') {
               onSwitchView('customer');
             } else {
               window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -54,21 +58,37 @@ export const Navbar: React.FC<NavbarProps> = ({
         <nav className="hidden md:flex items-center gap-8 text-sm font-mono-code tracking-wider text-[#2B1810]/80">
           <button
             onClick={() => {
-              if (currentView === 'staff') onSwitchView('customer');
-              setTimeout(onScrollToMenu, 100);
+              if (onNavigate) {
+                onNavigate('/menu');
+              } else {
+                if (currentView === 'staff') onSwitchView('customer');
+                setTimeout(onScrollToMenu, 100);
+              }
             }}
             className="hover:text-[#9C4A2F] transition-colors uppercase font-medium cursor-pointer"
           >
             Menu
           </button>
           <button
-            onClick={onOpenStory}
+            onClick={() => {
+              if (onNavigate) {
+                onNavigate('/our-story');
+              } else {
+                onOpenStory();
+              }
+            }}
             className="hover:text-[#9C4A2F] transition-colors uppercase font-medium cursor-pointer"
           >
             OUR STORY
           </button>
           <button
-            onClick={onOpenContact}
+            onClick={() => {
+              if (onNavigate) {
+                onNavigate('/contact');
+              } else {
+                onOpenContact();
+              }
+            }}
             className="hover:text-[#9C4A2F] transition-colors uppercase font-medium cursor-pointer"
           >
             CONTACT
@@ -119,28 +139,40 @@ export const Navbar: React.FC<NavbarProps> = ({
           <button
             onClick={() => {
               setMobileMenuOpen(false);
-              if (currentView === 'staff') onSwitchView('customer');
-              setTimeout(onScrollToMenu, 100);
+              if (onNavigate) {
+                onNavigate('/menu');
+              } else {
+                if (currentView === 'staff') onSwitchView('customer');
+                setTimeout(onScrollToMenu, 100);
+              }
             }}
-            className="text-left font-mono-code uppercase font-medium text-base text-[#2B1810] py-2 border-b border-[#2B1810]/10"
+            className="text-left font-mono-code uppercase font-medium text-base text-[#2B1810] py-2 border-b border-[#2B1810]/10 cursor-pointer"
           >
             Menu
           </button>
           <button
             onClick={() => {
               setMobileMenuOpen(false);
-              onOpenStory();
+              if (onNavigate) {
+                onNavigate('/our-story');
+              } else {
+                onOpenStory();
+              }
             }}
-            className="text-left font-mono-code uppercase font-medium text-base text-[#2B1810] py-2 border-b border-[#2B1810]/10"
+            className="text-left font-mono-code uppercase font-medium text-base text-[#2B1810] py-2 border-b border-[#2B1810]/10 cursor-pointer"
           >
             OUR STORY
           </button>
           <button
             onClick={() => {
               setMobileMenuOpen(false);
-              onOpenContact();
+              if (onNavigate) {
+                onNavigate('/contact');
+              } else {
+                onOpenContact();
+              }
             }}
-            className="text-left font-mono-code uppercase font-medium text-base text-[#2B1810] py-2 border-b border-[#2B1810]/10"
+            className="text-left font-mono-code uppercase font-medium text-base text-[#2B1810] py-2 border-b border-[#2B1810]/10 cursor-pointer"
           >
             CONTACT
           </button>

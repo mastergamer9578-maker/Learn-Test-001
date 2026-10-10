@@ -6,6 +6,7 @@ interface FooterProps {
   onOpenContact: () => void;
   onOpenStaff: () => void;
   onScrollToMenu: () => void;
+  onNavigate?: (path: string) => void;
 }
 
 export const Footer: React.FC<FooterProps> = ({
@@ -13,6 +14,7 @@ export const Footer: React.FC<FooterProps> = ({
   onOpenContact,
   onOpenStaff,
   onScrollToMenu,
+  onNavigate,
 }) => {
   return (
     <footer className="bg-[#EAE2D5] border-t border-[#2B1810]/15 mt-20 text-[#2B1810]">
@@ -21,8 +23,11 @@ export const Footer: React.FC<FooterProps> = ({
           
           {/* Col 1: Brand Info */}
           <div className="space-y-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-[#DE8030] text-[#2B1810] flex items-center justify-center">
+            <div 
+              onClick={() => onNavigate ? onNavigate('/') : window.scrollTo({ top: 0, behavior: 'smooth' })}
+              className="flex items-center gap-3 cursor-pointer group"
+            >
+              <div className="w-10 h-10 rounded-xl bg-[#DE8030] text-[#2B1810] flex items-center justify-center group-hover:scale-105 transition-transform">
                 <UtensilsCrossed className="w-5 h-5 stroke-[2.2]" />
               </div>
               <div>
@@ -50,7 +55,13 @@ export const Footer: React.FC<FooterProps> = ({
             </div>
             <div>
               <button
-                onClick={onScrollToMenu}
+                onClick={() => {
+                  if (onNavigate) {
+                    onNavigate('/menu');
+                  } else {
+                    onScrollToMenu();
+                  }
+                }}
                 className="hover:text-[#DE8030] transition text-[#2B1810]/80 cursor-pointer"
               >
                 Full Menu & Deals
@@ -58,7 +69,13 @@ export const Footer: React.FC<FooterProps> = ({
             </div>
             <div>
               <button
-                onClick={onOpenStory}
+                onClick={() => {
+                  if (onNavigate) {
+                    onNavigate('/our-story');
+                  } else {
+                    onOpenStory();
+                  }
+                }}
                 className="hover:text-[#DE8030] transition text-[#2B1810]/80 cursor-pointer"
               >
                 Our Story & Kitchen
@@ -66,7 +83,13 @@ export const Footer: React.FC<FooterProps> = ({
             </div>
             <div>
               <button
-                onClick={onOpenContact}
+                onClick={() => {
+                  if (onNavigate) {
+                    onNavigate('/contact');
+                  } else {
+                    onOpenContact();
+                  }
+                }}
                 className="hover:text-[#DE8030] transition text-[#2B1810]/80 cursor-pointer"
               >
                 Contact & Delivery Zone
@@ -74,7 +97,13 @@ export const Footer: React.FC<FooterProps> = ({
             </div>
             <div className="hidden lg:block">
               <button
-                onClick={onOpenStaff}
+                onClick={() => {
+                  if (onNavigate) {
+                    onNavigate('/staff');
+                  } else {
+                    onOpenStaff();
+                  }
+                }}
                 className="hover:text-[#DE8030] transition text-[#2B1810]/80 flex items-center gap-1.5 cursor-pointer pt-1"
               >
                 <Lock className="w-3.5 h-3.5 text-[#DE8030]" />
