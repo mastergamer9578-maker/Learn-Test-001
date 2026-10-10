@@ -37,14 +37,21 @@ import {
   Truck,
   ShieldCheck,
   Shield,
+  ShieldAlert,
   Lock,
   LogOut
 } from 'lucide-react';
 import { MenuItem, CustomerOrder, StoreStatus, DeliverySettings, StaffUser, CategoryDetail } from '../types';
 import { INITIAL_HERO_IMAGE } from '../data/initialMenu';
-import { sanitizeString } from '../utils/security';
+import {
+  sanitizeString,
+  sanitizeUrl,
+  isValidImageUrl,
+  sanitizeNumber,
+  checkRateLimit,
+} from '../utils/security';
 
-// Helper to convert and compress uploaded files into clean Base64 data URLs
+// Helper to convert and compress uploaded files into clean Base64 data URLs with security checks
 const readFileAsBase64 = (
   file: File,
   maxWidth = 1200,
@@ -52,6 +59,15 @@ const readFileAsBase64 = (
   quality = 0.85
 ): Promise<string> => {
   return new Promise((resolve, reject) => {
+    // Security check 1: Enforce image MIME type
+    if (!file.type || !file.type.startsWith('image/')) {
+      return reject(new Error('Invalid file type: only genuine image files (PNG, JPEG, WebP) are allowed.'));
+    }
+    // Security check 2: Enforce file size maximum (5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      return reject(new Error('File size exceeds safety limit (max 5MB).'));
+    }
+
     const reader = new FileReader();
     reader.onerror = reject;
     reader.onload = () => {
@@ -404,6 +420,7 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
   );
   const [isSavingDelivery, setIsSavingDelivery] = useState(false);
   const [deliverySavedFeedback, setDeliverySavedFeedback] = useState(false);
+  const [deliveryErrorMsg, setDeliveryErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
     if (deliverySettings) {
@@ -560,23 +577,23 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
       ? 'GOOD AFTERNOON, SHAN TEAM.'
       : 'GOOD EVENING, SHAN TEAM.';
 
-  // Delivery Settings Handlers
+  // Delivery Settings Handlers (Owner Only)
   const handleSaveDeliverySettings = async (e: React.FormEvent) => {
     e.preventDefault();
-    const fee = parseFloat(deliveryFeeInput);
-    const threshold = parseFloat(freeThresholdInput);
-    const zone = deliveryZoneInput.trim();
+    setDeliveryErrorMsg(null);
 
-    if (isNaN(fee) || fee < 0) {
-      alert('Please enter a valid standard delivery fee (0 or greater).');
+    // Strict UI RBAC Check
+    if (!isOwner) {
+      setDeliveryErrorMsg('Access Denied: Only Store Owner can modify store delivery pricing.');
       return;
     }
-    if (isNaN(threshold) || threshold < 0) {
-      alert('Please enter a valid free delivery threshold (0 or greater).');
-      return;
-    }
+
+    const fee = sanitizeNumber(deliveryFeeInput, 0, 5000, 120);
+    const threshold = sanitizeNumber(freeThresholdInput, 0, 100000, 1500);
+    const zone = sanitizeString(deliveryZoneInput, 50);
+
     if (!zone) {
-      alert('Please enter a delivery zone name (e.g. Korangi).');
+      setDeliveryErrorMsg('Please enter a valid delivery zone name (e.g. Korangi).');
       return;
     }
 
@@ -595,13 +612,18 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
       setTimeout(() => setDeliverySavedFeedback(false), 3000);
     } catch (err: any) {
       console.error('Failed to save delivery settings:', err);
-      alert(err?.message || 'Failed to save delivery settings.');
+      setDeliveryErrorMsg(err?.message || 'Failed to save delivery settings.');
     } finally {
       setIsSavingDelivery(false);
     }
   };
 
   const handleResetDeliverySettings = () => {
+    setDeliveryErrorMsg(null);
+    if (!isOwner) {
+      setDeliveryErrorMsg('Access Denied: Only Store Owner can reset delivery settings.');
+      return;
+    }
     setDeliveryFeeInput('120');
     setFreeThresholdInput('1500');
     setDeliveryZoneInput('Korangi');
@@ -726,15 +748,22 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
     }
   };
 
-  // Handle Adding Product
+  // Handle Adding Product (Owner Only)
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isOwner) {
+      setProductErrorMessage('Access Denied: Product creation requires Store Owner privileges.');
+      return;
+    }
     if (!newItemName.trim() || !newItemPrice.trim()) return;
 
-    const priceNum = parseFloat(newItemPrice);
-    if (isNaN(priceNum) || priceNum <= 0) return;
+    const priceNum = sanitizeNumber(newItemPrice, 1, 100000);
+    if (priceNum <= 0) {
+      setProductErrorMessage('Please enter a valid price greater than PKR 0.');
+      return;
+    }
 
-    const origPriceNum = newItemOriginalPrice ? parseFloat(newItemOriginalPrice) : undefined;
+    const origPriceNum = newItemOriginalPrice ? sanitizeNumber(newItemOriginalPrice, 1, 100000) : undefined;
     const defaultPlaceholderImage =
       newItemCategory === 'BURGERS'
         ? 'https://images.unsplash.com/photo-1568901346375-23c9450c58cd?auto=format&fit=crop&w=800&q=80'
@@ -790,8 +819,9 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
     }
   };
 
-  // Edit Product Handlers
+  // Edit Product Handlers (Owner Only)
   const handleStartEdit = (item: MenuItem) => {
+    if (!isOwner) return;
     setEditingItem(item);
     setEditName(item.name);
     setEditCategory(item.category);
@@ -802,11 +832,11 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
 
   const handleSaveEdit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingItem) return;
-    const priceNum = parseFloat(editPrice);
-    if (isNaN(priceNum) || priceNum <= 0) return;
+    if (!isOwner || !editingItem) return;
+    const priceNum = sanitizeNumber(editPrice, 1, 100000);
+    if (priceNum <= 0) return;
 
-    const origPriceNum = editOriginalPrice ? parseFloat(editOriginalPrice) : undefined;
+    const origPriceNum = editOriginalPrice ? sanitizeNumber(editOriginalPrice, 1, 100000) : undefined;
     const cleanEditName = sanitizeString(editName, 100) || editingItem.name;
     const cleanEditDesc = sanitizeString(editDescription, 300) || editingItem.description;
     const cleanEditCat = sanitizeString(editCategory, 50).toUpperCase() || editingItem.category;
@@ -855,9 +885,14 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
     }
   };
 
-  // Add Category Handler with Custom Banner & Firestore Persistence
+  // Add Category Handler with Custom Banner & Firestore Persistence (Owner Only)
   const handleAddCategory = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isOwner) {
+      setCategorySuccessMsg('Access Denied: Category creation is restricted to Store Owner.');
+      setTimeout(() => setCategorySuccessMsg(null), 3500);
+      return;
+    }
     const formatted = sanitizeString(newCategoryName, 50).toUpperCase();
     if (!formatted) return;
 
@@ -924,10 +959,10 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
     setEditCategoryBannerFileName('');
   };
 
-  // Save Edited Category to Firestore
+  // Save Edited Category to Firestore (Owner Only)
   const handleSaveEditedCategory = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingCategory) return;
+    if (!isOwner || !editingCategory) return;
     const formatted = sanitizeString(editingCategory.name, 50).toUpperCase();
     if (!formatted) return;
 
@@ -966,8 +1001,9 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
     }
   };
 
-  // Delete Category Handler with Firestore sync
+  // Delete Category Handler with Firestore sync (Owner Only)
   const promptDeleteCategory = (cat: string) => {
+    if (!isOwner) return;
     const normCat = cat.trim().toUpperCase();
     const itemsInCat = menuItems.filter((m) => (m.category || '').trim().toUpperCase() === normCat).length;
     setConfirmModal({
@@ -2606,7 +2642,21 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
                   <span>Delivery Settings Saved!</span>
                 </div>
               )}
+
+              {deliveryErrorMsg && (
+                <div className="px-3.5 py-1.5 rounded-full bg-red-100 text-red-800 text-xs font-mono-code font-bold flex items-center gap-1.5 animate-in fade-in self-start sm:self-auto">
+                  <AlertCircle className="w-3.5 h-3.5 text-red-600" />
+                  <span>{deliveryErrorMsg}</span>
+                </div>
+              )}
             </div>
+
+            {!isOwner && (
+              <div className="p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-2xl flex items-center gap-2.5 text-xs font-mono-code text-amber-900">
+                <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>RBAC Notice: Delivery fee configurations require Store Owner (isOwner) privileges. Administrator accounts have view-only access.</span>
+              </div>
+            )}
 
             <form onSubmit={handleSaveDeliverySettings} className="space-y-5">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -2698,8 +2748,8 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
               <div className="flex flex-wrap items-center gap-3 pt-1">
                 <button
                   type="submit"
-                  disabled={isSavingDelivery}
-                  className="px-6 py-2.5 rounded-full bg-[#2B1810] hover:bg-[#3E241A] active:scale-95 text-[#F5EFEB] text-xs font-mono-code uppercase font-bold flex items-center gap-2 transition cursor-pointer shadow-md disabled:opacity-50"
+                  disabled={isSavingDelivery || !isOwner}
+                  className="px-6 py-2.5 rounded-full bg-[#2B1810] hover:bg-[#3E241A] active:scale-95 text-[#F5EFEB] text-xs font-mono-code uppercase font-bold flex items-center gap-2 transition cursor-pointer shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isSavingDelivery ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
@@ -2711,8 +2761,9 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
 
                 <button
                   type="button"
+                  disabled={!isOwner}
                   onClick={handleResetDeliverySettings}
-                  className="px-4 py-2.5 rounded-full border border-[#2B1810]/20 hover:bg-[#2B1810]/5 text-xs font-mono-code uppercase font-semibold text-[#2B1810] flex items-center gap-1.5 transition cursor-pointer"
+                  className="px-4 py-2.5 rounded-full border border-[#2B1810]/20 hover:bg-[#2B1810]/5 text-xs font-mono-code uppercase font-semibold text-[#2B1810] flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <RotateCcw className="w-3.5 h-3.5" />
                   <span>Reset to Defaults</span>
@@ -2781,6 +2832,13 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
               )}
             </div>
 
+            {!isOwner && (
+              <div className="p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-2xl flex items-center gap-2.5 text-xs font-mono-code text-amber-900">
+                <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>RBAC Notice: Storefront Hero Photography branding requires Store Owner role.</span>
+              </div>
+            )}
+
             {/* Live Banner Preview */}
             <div className="relative aspect-[16/6] rounded-2xl overflow-hidden border border-[#2B1810]/20 bg-[#2B1810]">
               <img
@@ -2807,8 +2865,8 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
               <button
                 type="button"
                 onClick={() => bannerFileInputRef.current?.click()}
-                disabled={isBannerProcessing}
-                className="px-5 py-2.5 rounded-full bg-[#2B1810] hover:bg-[#3E241A] text-[#F5EFEB] text-xs font-mono-code uppercase font-semibold flex items-center justify-center gap-2 transition cursor-pointer"
+                disabled={isBannerProcessing || !isOwner}
+                className="px-5 py-2.5 rounded-full bg-[#2B1810] hover:bg-[#3E241A] text-[#F5EFEB] text-xs font-mono-code uppercase font-semibold flex items-center justify-center gap-2 transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isBannerProcessing ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
@@ -2820,8 +2878,9 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
 
               <button
                 type="button"
+                disabled={!isOwner}
                 onClick={handleResetDefaultBanner}
-                className="px-4 py-2.5 rounded-full border border-[#2B1810]/20 hover:bg-[#2B1810]/5 text-xs font-mono-code uppercase font-semibold text-[#2B1810] flex items-center justify-center gap-1.5 transition cursor-pointer"
+                className="px-4 py-2.5 rounded-full border border-[#2B1810]/20 hover:bg-[#2B1810]/5 text-xs font-mono-code uppercase font-semibold text-[#2B1810] flex items-center justify-center gap-1.5 transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
                 <span>Reset to Default</span>

@@ -3,6 +3,7 @@ import { signOut, applyActionCode } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from './firebase';
 import { MenuItem, CartItem, CustomerOrder, StoreStatus, DeliverySettings, DEFAULT_DELIVERY_SETTINGS, StaffUser, CategoryDetail } from './types';
+import { sanitizeString } from './utils/security';
 import { INITIAL_MENU_ITEMS, INITIAL_HERO_IMAGE } from './data/initialMenu';
 import { Navbar } from './components/Navbar';
 import { Hero } from './components/Hero';
@@ -229,13 +230,16 @@ export default function App() {
     });
   };
 
-  // Save/Update category with custom banner in Firestore
+  // Save/Update category with custom banner in Firestore (Owner Only)
   const handleSaveCategoryWithBanner = async (category: {
     id?: string;
     name: string;
     bannerImage?: string;
     tagline?: string;
   }) => {
+    if (!staffUser?.isOwner) {
+      throw new Error('Access Denied: Category management is restricted to Store Owner.');
+    }
     try {
       await saveCategoryWithBanner(category);
       const cleanName = category.name.trim().toUpperCase();
@@ -261,8 +265,11 @@ export default function App() {
     }
   };
 
-  // Delete category from Firestore
+  // Delete category from Firestore (Owner Only)
   const handleDeleteCategory = async (catIdOrName: string) => {
+    if (!staffUser?.isOwner) {
+      throw new Error('Access Denied: Category deletion is restricted to Store Owner.');
+    }
     try {
       await deleteCategoryDocument(catIdOrName);
       const clean = catIdOrName.trim().toUpperCase();
@@ -428,6 +435,12 @@ export default function App() {
     const unsubscribe = auth.onAuthStateChanged(async (firebaseUser) => {
       if (firebaseUser) {
         if (!firebaseUser.emailVerified) {
+          setIsStaffAuthenticated(false);
+          setStaffUser(null);
+          try {
+            sessionStorage.removeItem('shan_staff_auth');
+            sessionStorage.removeItem('shan_staff_user');
+          } catch {}
           return;
         }
         try {
@@ -449,13 +462,36 @@ export default function App() {
                 isOwner,
                 role: isOwner ? 'owner' : 'admin',
               };
+              setIsStaffAuthenticated(true);
               setStaffUser(authenticatedUser);
+              sessionStorage.setItem('shan_staff_auth', 'true');
               sessionStorage.setItem('shan_staff_user', JSON.stringify(authenticatedUser));
+            } else {
+              // User has no staff/owner roles assigned in Firestore
+              setIsStaffAuthenticated(false);
+              setStaffUser(null);
+              sessionStorage.removeItem('shan_staff_auth');
+              sessionStorage.removeItem('shan_staff_user');
+              await signOut(auth);
             }
+          } else {
+            // Profile document absent in Firestore
+            setIsStaffAuthenticated(false);
+            setStaffUser(null);
+            sessionStorage.removeItem('shan_staff_auth');
+            sessionStorage.removeItem('shan_staff_user');
           }
         } catch (err) {
           console.warn('[App] Firestore user role sync notice:', err);
         }
+      } else {
+        // Firebase Auth user signed out or token expired: immediately clear staff authorization state
+        setIsStaffAuthenticated(false);
+        setStaffUser(null);
+        try {
+          sessionStorage.removeItem('shan_staff_auth');
+          sessionStorage.removeItem('shan_staff_user');
+        } catch {}
       }
     });
     return () => unsubscribe();
@@ -537,13 +573,13 @@ export default function App() {
 
     const newOrder: CustomerOrder = {
       id: orderId,
-      customerName: orderData.customerName,
-      customerPhone: orderData.customerPhone,
-      customerAddress: orderData.customerAddress,
-      notes: orderData.notes || '',
+      customerName: sanitizeString(orderData.customerName, 80),
+      customerPhone: sanitizeString(orderData.customerPhone, 25),
+      customerAddress: sanitizeString(orderData.customerAddress, 250),
+      notes: sanitizeString(orderData.notes || '', 300),
       items: cart.map((ci) => ({
         id: ci.item.id,
-        name: ci.item.name,
+        name: sanitizeString(ci.item.name, 100),
         price: ci.item.price,
         quantity: ci.quantity,
       })),
@@ -605,8 +641,11 @@ export default function App() {
     setCurrentView('customer');
   };
 
-  // Staff Menu Item Management (Synced to Firestore 'products' collection)
+  // Staff Menu Item Management (Synced to Firestore 'products' collection - Owner Only)
   const handleAddMenuItem = async (item: Omit<MenuItem, 'id'>): Promise<void> => {
+    if (!staffUser?.isOwner) {
+      throw new Error('Access Denied: Product creation requires Store Owner privileges.');
+    }
     const newItem: MenuItem = {
       ...item,
       id: `shan-prod-${Date.now()}`,
@@ -621,6 +660,9 @@ export default function App() {
   };
 
   const handleToggleMenuItem = (id: string) => {
+    if (!staffUser?.isOwner && !staffUser?.isAdmin) {
+      return;
+    }
     const targetItem = menuItems.find((i) => i.id === id);
     const nextAvailability = targetItem ? !targetItem.isAvailable : false;
     setMenuItems((prev) =>
@@ -634,6 +676,9 @@ export default function App() {
   };
 
   const handleDeleteMenuItem = async (id: string): Promise<void> => {
+    if (!staffUser?.isOwner) {
+      throw new Error('Access Denied: Product deletion requires Store Owner privileges.');
+    }
     setMenuItems((prev) => prev.filter((item) => item.id !== id));
     try {
       await deleteMenuItem(id);
@@ -643,6 +688,9 @@ export default function App() {
   };
 
   const handleEditMenuItem = async (id: string, updates: Partial<MenuItem>): Promise<void> => {
+    if (!staffUser?.isOwner) {
+      throw new Error('Access Denied: Product editing requires Store Owner privileges.');
+    }
     setMenuItems((prev) =>
       prev.map((item) => (item.id === id ? { ...item, ...updates } : item))
     );
@@ -666,6 +714,9 @@ export default function App() {
 
   // Set Store Status directly (Synced to Firestore 'settings' and localStorage)
   const handleSetStoreStatus = (newStatus: StoreStatus) => {
+    if (!staffUser?.isOwner && !staffUser?.isAdmin) {
+      return;
+    }
     setStoreStatus(newStatus);
     try {
       localStorage.setItem('shan_store_status', newStatus);
@@ -677,21 +728,30 @@ export default function App() {
 
   // Staff Store Status Toggle (Cycles: ACCEPTING -> BUSY -> PAUSED -> ACCEPTING)
   const handleToggleStoreStatus = () => {
+    if (!staffUser?.isOwner && !staffUser?.isAdmin) {
+      return;
+    }
     const nextStatus: StoreStatus =
       storeStatus === 'ACCEPTING' ? 'BUSY' : storeStatus === 'BUSY' ? 'PAUSED' : 'ACCEPTING';
     handleSetStoreStatus(nextStatus);
   };
 
-  // Staff Hero Banner Update (Synced to Firestore 'settings' collection)
+  // Staff Hero Banner Update (Synced to Firestore 'settings' collection - Owner Only)
   const handleUpdateHeroImage = (newImage: string) => {
+    if (!staffUser?.isOwner) {
+      return;
+    }
     setHeroImage(newImage);
     updateStoreSettings({ heroImage: newImage }).catch((err) => {
       console.warn('[Firestore] Error updating hero banner in Firestore:', err);
     });
   };
 
-  // Staff Delivery Settings Update (Synced to Firestore 'settings' collection and localStorage)
+  // Staff Delivery Settings Update (Synced to Firestore 'settings' collection - Owner Only)
   const handleUpdateDeliverySettings = async (newSettings: DeliverySettings) => {
+    if (!staffUser?.isOwner) {
+      throw new Error('Access Denied: Delivery configuration requires Store Owner privileges.');
+    }
     setDeliverySettings(newSettings);
     try {
       localStorage.setItem('shan_delivery_settings', JSON.stringify(newSettings));

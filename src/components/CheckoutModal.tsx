@@ -1,7 +1,14 @@
 import React, { useState } from 'react';
 import { X, CheckCircle2, ArrowLeft, ArrowRight, ShieldCheck, MapPin, Phone, User, FileText, ShoppingBag, Loader2, AlertCircle } from 'lucide-react';
 import { CartItem, DeliverySettings } from '../types';
-import { sanitizeString, isValidPhone, checkRateLimit } from '../utils/security';
+import {
+  sanitizeString,
+  isValidPhone,
+  checkRateLimit,
+  getOrCreateCsrfToken,
+  validateCsrfToken,
+  isHoneypotTriggered,
+} from '../utils/security';
 
 interface CheckoutModalProps {
   isOpen: boolean;
@@ -31,6 +38,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const [customerPhone, setCustomerPhone] = useState('');
   const [customerAddress, setCustomerAddress] = useState('');
   const [orderNotes, setOrderNotes] = useState('');
+  const [honeypot, setHoneypot] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [completedOrderId, setCompletedOrderId] = useState<string | null>(null);
@@ -53,7 +61,19 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     e.preventDefault();
     setErrorMessage(null);
 
-    // Input sanitization against XSS and control characters
+    // Anti-bot honeypot check: reject automated bot scrapers
+    if (isHoneypotTriggered(honeypot)) {
+      return;
+    }
+
+    // CSRF token verification for state-changing checkout operations
+    const csrfToken = getOrCreateCsrfToken();
+    if (!validateCsrfToken(csrfToken)) {
+      setErrorMessage('Security validation error: invalid session token. Please reload the page.');
+      return;
+    }
+
+    // Input sanitization against XSS, control characters and tag injection
     const cleanName = sanitizeString(customerName, 80);
     const cleanPhone = sanitizeString(customerPhone, 25);
     const cleanAddress = sanitizeString(customerAddress, 250);
@@ -196,6 +216,17 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
               {/* Form & Order Review */}
               <form onSubmit={handleSubmitOrder} className="p-6 sm:p-8 space-y-6">
+                {/* Security honeypot trap against automated spambots */}
+                <input
+                  type="text"
+                  name="user_store_company_hp"
+                  value={honeypot}
+                  onChange={(e) => setHoneypot(e.target.value)}
+                  tabIndex={-1}
+                  autoComplete="off"
+                  className="hidden"
+                  aria-hidden="true"
+                />
                 
                 {/* Compact Order Summary Accordion/Card */}
                 <div className="bg-[#ECE4D8] border border-[#2B1810]/15 rounded-2xl p-4 space-y-3 font-mono-code text-xs">

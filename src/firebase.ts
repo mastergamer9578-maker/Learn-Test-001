@@ -1,7 +1,7 @@
 // Import the functions you need from the SDKs you need
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { initializeFirestore, getFirestore, setLogLevel } from "firebase/firestore";
-import { getAuth } from "firebase/auth";
+import { getAuth, setPersistence, browserSessionPersistence } from "firebase/auth";
 
 // Web app's Firebase configuration (loaded safely via environment variables with fallbacks)
 export const firebaseConfig = {
@@ -71,3 +71,10 @@ try {
 
 export const db = firestoreDb;
 export const auth = getAuth(app);
+
+// Enforce session persistence: Auth tokens reside in session memory and expire when the browser session terminates
+if (typeof window !== 'undefined') {
+  setPersistence(auth, browserSessionPersistence).catch((err) => {
+    console.warn('[Firebase Auth] Session persistence configuration notice:', err?.message || err);
+  });
+}
