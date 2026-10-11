@@ -533,8 +533,8 @@ export default function App() {
 
               if (snap.exists()) {
                 const data = snap.data();
-                const isOwner = Boolean(data?.isOwner === true || data?.role === 'owner');
-                const isAdmin = Boolean(data?.isAdmin === true || data?.role === 'admin' || isOwner);
+                const isOwner = data?.isOwner === true;
+                const isAdmin = Boolean(data?.isAdmin === true || isOwner);
 
                 if (isAdmin || isOwner) {
                   const authenticatedUser: StaffUser = {

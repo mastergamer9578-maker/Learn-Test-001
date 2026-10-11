@@ -129,8 +129,8 @@ export const AdminPrivateRoute: React.FC<AdminPrivateRouteProps> = ({
       if (docSnap) {
         const data = docSnap.data();
         // Strictly respect Firestore document fields without email override
-        isOwner = Boolean(data?.isOwner === true || data?.role === 'owner');
-        isAdmin = Boolean(data?.isAdmin === true || data?.role === 'admin' || isOwner);
+        isOwner = data?.isOwner === true;
+        isAdmin = Boolean(data?.isAdmin === true || isOwner);
         displayName = data?.name || data?.displayName || (isOwner ? 'Store Owner' : 'Staff / Admin');
 
         if (!isAdmin && !isOwner) {
@@ -228,8 +228,8 @@ export const AdminPrivateRoute: React.FC<AdminPrivateRouteProps> = ({
             if (!isMounted) return;
             if (docSnap.exists()) {
               const data = docSnap.data();
-              const isOwner = Boolean(data?.isOwner === true || data?.role === 'owner');
-              const isAdmin = Boolean(data?.isAdmin === true || data?.role === 'admin' || isOwner);
+              const isOwner = data?.isOwner === true;
+              const isAdmin = Boolean(data?.isAdmin === true || isOwner);
 
               if (isAdmin || isOwner) {
                 const liveProfile: StaffUser = {

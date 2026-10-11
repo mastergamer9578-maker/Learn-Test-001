@@ -207,6 +207,7 @@ interface StaffDashboardProps {
   isOwner?: boolean;
   isAdmin?: boolean;
   staffUser?: StaffUser;
+  restrictSettingsTab?: boolean;
   onLogout?: () => void;
 }
 
@@ -233,6 +234,7 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
   isOwner: propIsOwner = false,
   isAdmin: propIsAdmin = false,
   staffUser,
+  restrictSettingsTab = false,
   onLogout,
 }) => {
   // Navigation Tabs in the exact requested order: Orders (1st), Analytics (2nd), Products (3rd), Categories (4th), Settings (5th)
@@ -243,18 +245,18 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
     isAdmin: boolean;
     isOwner: boolean;
     isLoaded: boolean;
-  }>({
-    isAdmin: Boolean(staffUser?.isAdmin ?? propIsAdmin),
-    isOwner: Boolean(staffUser?.isOwner ?? propIsOwner),
+  }>(() => ({
+    isAdmin: Boolean(staffUser?.isAdmin),
+    isOwner: staffUser?.isOwner === true,
     isLoaded: false,
-  });
+  }));
 
   // Keep firestoreRoles state synced when staffUser prop updates
   useEffect(() => {
     if (staffUser) {
       setFirestoreRoles((prev) => ({
         isAdmin: Boolean(staffUser.isAdmin),
-        isOwner: Boolean(staffUser.isOwner),
+        isOwner: staffUser.isOwner === true,
         isLoaded: prev.isLoaded,
       }));
     }
@@ -271,9 +273,10 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
           (docSnap) => {
             if (docSnap.exists()) {
               const data = docSnap.data();
-              const firestoreIsOwner = Boolean(data?.isOwner === true || data?.role === 'owner');
+              // Strictly verify dynamic isOwner and isAdmin fields directly from Firestore 'users/{uid}'
+              const firestoreIsOwner = data?.isOwner === true;
               const firestoreIsAdmin = Boolean(
-                data?.isAdmin === true || data?.role === 'admin' || firestoreIsOwner
+                data?.isAdmin === true || firestoreIsOwner
               );
               setFirestoreRoles({
                 isAdmin: firestoreIsAdmin,
@@ -286,9 +289,9 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
                 .then((sSnap) => {
                   if (sSnap.exists()) {
                     const sData = sSnap.data();
-                    const sIsOwner = Boolean(sData?.isOwner === true || sData?.role === 'owner');
+                    const sIsOwner = sData?.isOwner === true;
                     const sIsAdmin = Boolean(
-                      sData?.isAdmin === true || sData?.role === 'admin' || sIsOwner
+                      sData?.isAdmin === true || sIsOwner
                     );
                     setFirestoreRoles({
                       isAdmin: sIsAdmin,
@@ -331,13 +334,13 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
     };
   }, [staffUser?.uid]);
 
-  // Dynamically resolved permissions from Firestore (fallback to staffUser or props if not yet loaded)
+  // Dynamically resolved permissions from Firestore: directly reads isOwner and isAdmin fields
   const isOwner = firestoreRoles.isLoaded
-    ? firestoreRoles.isOwner
-    : Boolean(staffUser?.isOwner ?? propIsOwner);
+    ? firestoreRoles.isOwner === true
+    : (staffUser ? staffUser.isOwner === true : propIsOwner === true);
 
   const isAdmin = firestoreRoles.isLoaded
-    ? firestoreRoles.isAdmin
+    ? firestoreRoles.isAdmin === true
     : Boolean(staffUser?.isAdmin ?? propIsAdmin);
 
   // Categories State (managed dynamically with default presets and shared props)
@@ -348,12 +351,17 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
     return Array.from(new Set([...defaultCategories, ...fromProps, ...existing].filter(Boolean)));
   });
 
-  // Enforce Access Guard: Disable direct access to Products and Categories for non-owner admins
+  // Enforce Access Guard: Disable direct access to Products, Categories, and Settings (if restricted) for non-owner
   useEffect(() => {
-    if (!isOwner && (activeTab === 'products' || activeTab === 'categories')) {
-      setActiveTab('orders');
+    if (!isOwner) {
+      if (activeTab === 'products' || activeTab === 'categories') {
+        setActiveTab('orders');
+      }
+      if (restrictSettingsTab && activeTab === 'settings') {
+        setActiveTab('orders');
+      }
     }
-  }, [isOwner, activeTab]);
+  }, [isOwner, activeTab, restrictSettingsTab]);
 
   // Keep in sync if categories prop updates
   useEffect(() => {
@@ -1109,7 +1117,7 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
                 <ShieldCheck className="w-3.5 h-3.5 text-[#DE8030]" />
                 <span>STORE OWNER (FULL 5-TAB ACCESS)</span>
               </span>
-            ) : isAdmin ? (
+            ) : (
               <span
                 data-testid="role-badge"
                 className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-500/15 text-blue-800 border border-blue-500/30 text-[11px] font-mono-code font-bold uppercase"
@@ -1117,7 +1125,7 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
                 <Shield className="w-3.5 h-3.5 text-blue-600" />
                 <span>STAFF / ADMIN</span>
               </span>
-            ) : null}
+            )}
 
             {onLogout && (
               <button
@@ -1270,18 +1278,20 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
           )}
 
           {/* 5. Settings (5th) */}
-          <button
-            type="button"
-            onClick={() => setActiveTab('settings')}
-            className={`flex items-center gap-2 px-4 sm:px-5 py-2.5 rounded-xl font-mono-code text-xs sm:text-sm font-bold uppercase tracking-wider transition-all cursor-pointer whitespace-nowrap shrink-0 ${
-              activeTab === 'settings'
-                ? 'bg-[#2B1810] text-[#F5EFEB] shadow-md'
-                : 'text-[#2B1810]/70 hover:bg-[#2B1810]/5 hover:text-[#2B1810]'
-            }`}
-          >
-            <SettingsIcon className="w-4 h-4" />
-            <span>Settings</span>
-          </button>
+          {(!restrictSettingsTab || isOwner) && (
+            <button
+              type="button"
+              onClick={() => setActiveTab('settings')}
+              className={`flex items-center gap-2 px-4 sm:px-5 py-2.5 rounded-xl font-mono-code text-xs sm:text-sm font-bold uppercase tracking-wider transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                activeTab === 'settings'
+                  ? 'bg-[#2B1810] text-[#F5EFEB] shadow-md'
+                  : 'text-[#2B1810]/70 hover:bg-[#2B1810]/5 hover:text-[#2B1810]'
+              }`}
+            >
+              <SettingsIcon className="w-4 h-4" />
+              <span>Settings</span>
+            </button>
+          )}
 
         </div>
       </div>
@@ -2746,8 +2756,8 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
           </div>
           )}
 
-          {/* 2. Delivery Management Controls (Dynamic sync across storefront, "The Bag", & checkout) */}
-          {(settingsSubTab === 'all' || settingsSubTab === 'delivery') && (
+          {/* 2. Delivery Management Controls (Owner-only setting tab) */}
+          {isOwner && (settingsSubTab === 'all' || settingsSubTab === 'delivery') && (
           <div className="bg-[#ECE4D8] border border-[#2B1810]/15 rounded-3xl p-6 sm:p-7 shadow-xs space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
@@ -2942,8 +2952,8 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
           </div>
           )}
 
-          {/* 4. Hero Banner Updates with Local File Upload */}
-          {(settingsSubTab === 'all' || settingsSubTab === 'branding') && (
+          {/* 4. Hero Banner Updates with Local File Upload (Owner-only setting tab) */}
+          {isOwner && (settingsSubTab === 'all' || settingsSubTab === 'branding') && (
           <div className="bg-[#ECE4D8] border border-[#2B1810]/15 rounded-3xl p-6 sm:p-7 shadow-xs space-y-5">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>

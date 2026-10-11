@@ -129,8 +129,8 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
 
       if (userDocSnap) {
         const uData = userDocSnap.data();
-        isAdmin = Boolean(uData?.isAdmin === true || uData?.role === 'admin' || uData?.role === 'owner');
-        isOwner = Boolean(uData?.isOwner === true || uData?.role === 'owner');
+        isOwner = uData?.isOwner === true;
+        isAdmin = Boolean(uData?.isAdmin === true || isOwner);
         displayName = uData?.name || uData?.displayName || (isOwner ? 'Store Owner' : 'Staff / Admin');
 
         // 2. If BOTH isAdmin and isOwner are false (or missing), block, sign out, and show error
@@ -317,11 +317,11 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
               const storedPass = String(data.password ?? data.pin ?? data.pass ?? '');
               if (storedPass && storedPass === cleanPass) {
                 isVerified = true;
-                const isOwner = Boolean(data.isOwner || data.role === 'owner' || cleanId.toLowerCase().includes('owner'));
+                const isOwner = data?.isOwner === true;
                 const authenticatedUser: StaffUser = {
                   uid: docSnap.id,
                   email: data.email || cleanId,
-                  name: data.name || (isOwner ? 'Store Owner' : 'Store Administrator'),
+                  name: data.name || (isOwner ? 'Store Owner' : 'Staff / Admin'),
                   isAdmin: true,
                   isOwner,
                   role: isOwner ? 'owner' : 'admin',
@@ -352,11 +352,11 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
                   const storedPass = String(data.password ?? data.pin ?? data.pass ?? '');
                   if (storedPass && storedPass === cleanPass) {
                     isVerified = true;
-                    const isOwner = Boolean(data.isOwner || data.role === 'owner' || cleanId.toLowerCase().includes('owner'));
+                    const isOwner = data?.isOwner === true;
                     const authenticatedUser: StaffUser = {
                       uid: d.id,
                       email: data.email || cleanId,
-                      name: data.name || (isOwner ? 'Store Owner' : 'Store Administrator'),
+                      name: data.name || (isOwner ? 'Store Owner' : 'Staff / Admin'),
                       isAdmin: true,
                       isOwner,
                       role: isOwner ? 'owner' : 'admin',

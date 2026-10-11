@@ -160,8 +160,8 @@ export const ProtectedAuthGuard: React.FC<ProtectedAuthGuardProps> = ({
 
       if (userDocSnap) {
         const uData = userDocSnap.data();
-        isAdmin = Boolean(uData?.isAdmin === true || uData?.role === 'admin' || uData?.role === 'owner');
-        isOwner = Boolean(uData?.isOwner === true || uData?.role === 'owner');
+        isOwner = uData?.isOwner === true;
+        isAdmin = Boolean(uData?.isAdmin === true || isOwner);
         displayName = uData?.name || uData?.displayName || (isOwner ? 'Store Owner' : 'Staff / Admin');
 
         if (!isAdmin && !isOwner) {
