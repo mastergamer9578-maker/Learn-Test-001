@@ -22,7 +22,7 @@ import {
   signOut,
   User as FirebaseUser,
 } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, onSnapshot } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 import { StaffUser } from '../types';
 import { sanitizeString, checkRateLimit, useLoginLockout } from '../utils/security';
@@ -128,12 +128,13 @@ export const AdminPrivateRoute: React.FC<AdminPrivateRouteProps> = ({
 
       if (docSnap) {
         const data = docSnap.data();
-        isOwner = Boolean(data?.isOwner === true || data?.role === 'owner' || (isOwnerByEmail && data?.role !== 'staff'));
+        // Strictly respect Firestore document fields without email override
+        isOwner = Boolean(data?.isOwner === true || data?.role === 'owner');
         isAdmin = Boolean(data?.isAdmin === true || data?.role === 'admin' || isOwner);
-        displayName = data?.name || data?.displayName || (isOwner ? 'Store Owner' : 'Store Administrator');
+        displayName = data?.name || data?.displayName || (isOwner ? 'Store Owner' : 'Staff / Admin');
 
         if (!isAdmin && !isOwner) {
-          return null; // Document exists, but lacks admin role
+          return null; // Document exists, but lacks admin or owner role
         }
       } else {
         // Document does not exist in Firestore
@@ -164,7 +165,7 @@ export const AdminPrivateRoute: React.FC<AdminPrivateRouteProps> = ({
       return {
         uid: user.uid,
         email: user.email || '',
-        name: displayName || (isOwner ? 'Store Owner' : 'Store Administrator'),
+        name: displayName || (isOwner ? 'Store Owner' : 'Staff / Admin'),
         isAdmin,
         isOwner,
         role: isOwner ? 'owner' : 'admin',
@@ -175,12 +176,18 @@ export const AdminPrivateRoute: React.FC<AdminPrivateRouteProps> = ({
     }
   };
 
-  // Continuous listener to Firebase Auth state
+  // Continuous listener to Firebase Auth state and real-time Firestore user role changes
   useEffect(() => {
     let isMounted = true;
+    let unsubscribeDoc: (() => void) | null = null;
 
-    const unsubscribe = auth.onAuthStateChanged(async (firebaseUser) => {
+    const unsubscribeAuth = auth.onAuthStateChanged(async (firebaseUser) => {
       if (!isMounted) return;
+
+      if (unsubscribeDoc) {
+        unsubscribeDoc();
+        unsubscribeDoc = null;
+      }
 
       if (!firebaseUser) {
         setActiveUser(null);
@@ -198,23 +205,63 @@ export const AdminPrivateRoute: React.FC<AdminPrivateRouteProps> = ({
         return;
       }
 
-      // Guard 2: Enforce Firestore Admin / Owner Role
+      // Guard 2: Initial role check & bootstrap if necessary
       const verifiedProfile = await verifyFirestoreAdminRole(firebaseUser);
       if (!isMounted) return;
 
       if (!verifiedProfile) {
         setStaffProfile(null);
         setAuthStatus('unauthorized');
+        return;
       } else {
         setStaffProfile(verifiedProfile);
         setAuthStatus('authorized');
         onSuccess(verifiedProfile);
       }
+
+      // Guard 3: Real-time onSnapshot listener to update instantly on Firestore role edits
+      try {
+        const userDocRef = doc(db, 'users', firebaseUser.uid);
+        unsubscribeDoc = onSnapshot(
+          userDocRef,
+          (docSnap) => {
+            if (!isMounted) return;
+            if (docSnap.exists()) {
+              const data = docSnap.data();
+              const isOwner = Boolean(data?.isOwner === true || data?.role === 'owner');
+              const isAdmin = Boolean(data?.isAdmin === true || data?.role === 'admin' || isOwner);
+
+              if (isAdmin || isOwner) {
+                const liveProfile: StaffUser = {
+                  uid: firebaseUser.uid,
+                  email: firebaseUser.email || '',
+                  name: data?.name || data?.displayName || (isOwner ? 'Store Owner' : 'Staff / Admin'),
+                  isAdmin,
+                  isOwner,
+                  role: isOwner ? 'owner' : 'admin',
+                };
+                setStaffProfile(liveProfile);
+                setAuthStatus('authorized');
+                onSuccess(liveProfile);
+              } else {
+                setStaffProfile(null);
+                setAuthStatus('unauthorized');
+              }
+            }
+          },
+          (err) => {
+            console.warn('[AdminPrivateRoute] Real-time role listener notice:', err);
+          }
+        );
+      } catch (subErr) {
+        console.warn('[AdminPrivateRoute] Failed to setup onSnapshot:', subErr);
+      }
     });
 
     return () => {
       isMounted = false;
-      unsubscribe();
+      if (unsubscribeDoc) unsubscribeDoc();
+      unsubscribeAuth();
     };
   }, []);
 

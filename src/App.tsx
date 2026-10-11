@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { signOut, applyActionCode } from 'firebase/auth';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, onSnapshot } from 'firebase/firestore';
 import { auth, db } from './firebase';
 import { MenuItem, CartItem, CustomerOrder, StoreStatus, DeliverySettings, DEFAULT_DELIVERY_SETTINGS, StaffUser, CategoryDetail } from './types';
 import { sanitizeString } from './utils/security';
@@ -484,87 +484,118 @@ export default function App() {
 
   // 5. Dynamic sync of authenticated staff permissions directly from Firestore 'users' collection
   useEffect(() => {
-    const unsubscribe = auth.onAuthStateChanged(async (firebaseUser) => {
+    let unsubscribeDoc: (() => void) | null = null;
+
+    const unsubscribeAuth = auth.onAuthStateChanged((firebaseUser) => {
+      if (unsubscribeDoc) {
+        unsubscribeDoc();
+        unsubscribeDoc = null;
+      }
+
+      if (!firebaseUser) {
+        // Firebase Auth user signed out or token expired: immediately clear staff authorization state
+        setIsStaffAuthenticated(false);
+        setStaffUser(null);
+        try {
+          sessionStorage.removeItem('shan_staff_auth');
+          sessionStorage.removeItem('shan_staff_user');
+        } catch {}
+        if (isProtectedDashboardPath(window.location.pathname)) {
+          setCurrentView('customer');
+        }
+        setIsAuthChecking(false);
+        return;
+      }
+
+      if (!firebaseUser.emailVerified) {
+        setIsStaffAuthenticated(false);
+        setStaffUser(null);
+        try {
+          sessionStorage.removeItem('shan_staff_auth');
+          sessionStorage.removeItem('shan_staff_user');
+        } catch {}
+        setIsAuthChecking(false);
+        return;
+      }
+
+      // Real-time listener directly on users/{user.uid}
       try {
-        if (firebaseUser) {
-          if (!firebaseUser.emailVerified) {
-            setIsStaffAuthenticated(false);
-            setStaffUser(null);
+        const userDocRef = doc(db, 'users', firebaseUser.uid);
+        unsubscribeDoc = onSnapshot(
+          userDocRef,
+          async (docSnap) => {
             try {
-              sessionStorage.removeItem('shan_staff_auth');
-              sessionStorage.removeItem('shan_staff_user');
-            } catch {}
-            return;
-          }
-          try {
-            let docSnap = await getDoc(doc(db, 'users', firebaseUser.uid));
-            if (!docSnap.exists()) {
-              const staffSnap = await getDoc(doc(db, 'staff', firebaseUser.uid));
-              if (staffSnap.exists()) docSnap = staffSnap;
-            }
-            if (docSnap.exists()) {
-              const data = docSnap.data();
-              const isOwner = Boolean(data?.isOwner === true || data?.role === 'owner');
-              const isAdmin = Boolean(data?.isAdmin === true || data?.role === 'admin' || isOwner);
-              if (isAdmin || isOwner) {
-                const authenticatedUser: StaffUser = {
-                  uid: firebaseUser.uid,
-                  email: firebaseUser.email || '',
-                  name: data?.name || data?.displayName || (isOwner ? 'Store Owner' : 'Store Administrator'),
-                  isAdmin,
-                  isOwner,
-                  role: isOwner ? 'owner' : 'admin',
-                };
-                setIsStaffAuthenticated(true);
-                setStaffUser(authenticatedUser);
-                try {
-                  sessionStorage.setItem('shan_staff_auth', 'true');
-                  sessionStorage.setItem('shan_staff_user', JSON.stringify(authenticatedUser));
-                } catch {}
-                if (isProtectedDashboardPath(window.location.pathname)) {
-                  setCurrentView('staff');
+              let snap = docSnap;
+              if (!snap.exists()) {
+                const staffSnap = await getDoc(doc(db, 'staff', firebaseUser.uid));
+                if (staffSnap.exists()) snap = staffSnap;
+              }
+
+              if (snap.exists()) {
+                const data = snap.data();
+                const isOwner = Boolean(data?.isOwner === true || data?.role === 'owner');
+                const isAdmin = Boolean(data?.isAdmin === true || data?.role === 'admin' || isOwner);
+
+                if (isAdmin || isOwner) {
+                  const authenticatedUser: StaffUser = {
+                    uid: firebaseUser.uid,
+                    email: firebaseUser.email || '',
+                    name: data?.name || data?.displayName || (isOwner ? 'Store Owner' : 'Staff / Admin'),
+                    isAdmin,
+                    isOwner,
+                    role: isOwner ? 'owner' : 'admin',
+                  };
+                  setIsStaffAuthenticated(true);
+                  setStaffUser(authenticatedUser);
+                  try {
+                    sessionStorage.setItem('shan_staff_auth', 'true');
+                    sessionStorage.setItem('shan_staff_user', JSON.stringify(authenticatedUser));
+                  } catch {}
+                  if (isProtectedDashboardPath(window.location.pathname)) {
+                    setCurrentView('staff');
+                  }
+                } else {
+                  // User has no staff/owner roles assigned in Firestore
+                  setIsStaffAuthenticated(false);
+                  setStaffUser(null);
+                  try {
+                    sessionStorage.removeItem('shan_staff_auth');
+                    sessionStorage.removeItem('shan_staff_user');
+                  } catch {}
+                  await signOut(auth);
                 }
               } else {
-                // User has no staff/owner roles assigned in Firestore
+                // Profile document absent in Firestore
                 setIsStaffAuthenticated(false);
                 setStaffUser(null);
                 try {
                   sessionStorage.removeItem('shan_staff_auth');
                   sessionStorage.removeItem('shan_staff_user');
                 } catch {}
-                await signOut(auth);
               }
-            } else {
-              // Profile document absent in Firestore
+            } catch (err) {
+              console.warn('[App] Firestore user role sync notice:', err);
               setIsStaffAuthenticated(false);
               setStaffUser(null);
-              try {
-                sessionStorage.removeItem('shan_staff_auth');
-                sessionStorage.removeItem('shan_staff_user');
-              } catch {}
+            } finally {
+              setIsAuthChecking(false);
             }
-          } catch (err) {
-            console.warn('[App] Firestore user role sync notice:', err);
-            setIsStaffAuthenticated(false);
-            setStaffUser(null);
+          },
+          (err) => {
+            console.warn('[App] Firestore realtime listener notice:', err);
+            setIsAuthChecking(false);
           }
-        } else {
-          // Firebase Auth user signed out or token expired: immediately clear staff authorization state
-          setIsStaffAuthenticated(false);
-          setStaffUser(null);
-          try {
-            sessionStorage.removeItem('shan_staff_auth');
-            sessionStorage.removeItem('shan_staff_user');
-          } catch {}
-          if (isProtectedDashboardPath(window.location.pathname)) {
-            setCurrentView('customer');
-          }
-        }
-      } finally {
+        );
+      } catch (err) {
+        console.warn('[App] Failed to attach user doc listener:', err);
         setIsAuthChecking(false);
       }
     });
-    return () => unsubscribe();
+
+    return () => {
+      if (unsubscribeDoc) unsubscribeDoc();
+      unsubscribeAuth();
+    };
   }, []);
 
   // Fallback local persistence for settings and status

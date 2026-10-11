@@ -249,6 +249,17 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
     isLoaded: false,
   });
 
+  // Keep firestoreRoles state synced when staffUser prop updates
+  useEffect(() => {
+    if (staffUser) {
+      setFirestoreRoles((prev) => ({
+        isAdmin: Boolean(staffUser.isAdmin),
+        isOwner: Boolean(staffUser.isOwner),
+        isLoaded: prev.isLoaded,
+      }));
+    }
+  }, [staffUser?.isOwner, staffUser?.isAdmin]);
+
   useEffect(() => {
     let unsubscribeSnapshot: (() => void) | null = null;
 
@@ -306,7 +317,7 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
     }
 
     const unsubscribeAuth = auth.onAuthStateChanged((user) => {
-      if (user?.uid && user.uid !== currentUid) {
+      if (user?.uid) {
         if (unsubscribeSnapshot) {
           unsubscribeSnapshot();
         }
@@ -352,6 +363,15 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
       setCustomCategories(Array.from(new Set([...defaultCategories, ...fromProps, ...existing].filter(Boolean))));
     }
   }, [categories, menuItems]);
+
+  // Settings Tab Sub-navigation (Enforces Owner-only restrictions on delivery & branding setting tabs)
+  const [settingsSubTab, setSettingsSubTab] = useState<'all' | 'status' | 'delivery' | 'branding' | 'categories'>('all');
+
+  useEffect(() => {
+    if (!isOwner && (settingsSubTab === 'delivery' || settingsSubTab === 'branding' || settingsSubTab === 'categories')) {
+      setSettingsSubTab('all');
+    }
+  }, [isOwner, settingsSubTab]);
 
   // Category Banner State for Creation
   const [newCategoryName, setNewCategoryName] = useState('');
@@ -1084,7 +1104,7 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
             {isOwner ? (
               <span
                 data-testid="role-badge"
-                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#DE8030]/15 text-[#C46726] border border-[#DE8030]/30 text-[11px] font-mono-code font-bold"
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#DE8030]/15 text-[#C46726] border border-[#DE8030]/30 text-[11px] font-mono-code font-bold uppercase"
               >
                 <ShieldCheck className="w-3.5 h-3.5 text-[#DE8030]" />
                 <span>STORE OWNER (FULL 5-TAB ACCESS)</span>
@@ -1092,10 +1112,10 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
             ) : isAdmin ? (
               <span
                 data-testid="role-badge"
-                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-500/15 text-blue-800 border border-blue-500/30 text-[11px] font-mono-code font-bold"
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-500/15 text-blue-800 border border-blue-500/30 text-[11px] font-mono-code font-bold uppercase"
               >
                 <Shield className="w-3.5 h-3.5 text-blue-600" />
-                <span>STORE ADMIN (with restricted access)</span>
+                <span>STAFF / ADMIN</span>
               </span>
             ) : null}
 
@@ -2492,16 +2512,94 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
       {activeTab === 'settings' && (
         <div className="space-y-8 animate-in fade-in duration-200">
           
-          <div>
-            <div className="text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#C46726] uppercase">
-              STORE MANAGEMENT
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <div className="text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#C46726] uppercase">
+                STORE MANAGEMENT
+              </div>
+              <h2 className="font-display font-black text-3xl sm:text-4xl text-[#2B1810] uppercase tracking-tight">
+                STORE CONFIGURATIONS
+              </h2>
             </div>
-            <h2 className="font-display font-black text-3xl sm:text-4xl text-[#2B1810] uppercase tracking-tight">
-              STORE CONFIGURATIONS
-            </h2>
+
+            {!isOwner && (
+              <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-900 text-xs font-mono-code font-bold self-start sm:self-auto">
+                <Lock className="w-3.5 h-3.5 text-amber-700" />
+                <span>Owner-Only Setting Tabs Restricted</span>
+              </div>
+            )}
+          </div>
+
+          {/* Settings Sub-Tabs Navigation (Enforces Owner-only restrictions on delivery & branding setting tabs) */}
+          <div className="flex items-center gap-1.5 p-1.5 bg-[#ECE4D8] rounded-2xl border border-[#2B1810]/15 overflow-x-auto scrollbar-none">
+            <button
+              type="button"
+              onClick={() => setSettingsSubTab('all')}
+              className={`px-4 py-2 rounded-xl text-xs font-mono-code font-bold uppercase transition whitespace-nowrap cursor-pointer ${
+                settingsSubTab === 'all'
+                  ? 'bg-[#2B1810] text-[#F5EFEB] shadow-sm'
+                  : 'text-[#2B1810]/70 hover:bg-[#2B1810]/5'
+              }`}
+            >
+              All Store Settings
+            </button>
+            <button
+              type="button"
+              onClick={() => setSettingsSubTab('status')}
+              className={`px-4 py-2 rounded-xl text-xs font-mono-code font-bold uppercase transition whitespace-nowrap cursor-pointer ${
+                settingsSubTab === 'status'
+                  ? 'bg-[#2B1810] text-[#F5EFEB] shadow-sm'
+                  : 'text-[#2B1810]/70 hover:bg-[#2B1810]/5'
+              }`}
+            >
+              Operating Status & Hours
+            </button>
+            {isOwner ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setSettingsSubTab('delivery')}
+                  className={`px-4 py-2 rounded-xl text-xs font-mono-code font-bold uppercase transition whitespace-nowrap cursor-pointer ${
+                    settingsSubTab === 'delivery'
+                      ? 'bg-[#2B1810] text-[#F5EFEB] shadow-sm'
+                      : 'text-[#2B1810]/70 hover:bg-[#2B1810]/5'
+                  }`}
+                >
+                  Delivery Rules
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSettingsSubTab('branding')}
+                  className={`px-4 py-2 rounded-xl text-xs font-mono-code font-bold uppercase transition whitespace-nowrap cursor-pointer ${
+                    settingsSubTab === 'branding'
+                      ? 'bg-[#2B1810] text-[#F5EFEB] shadow-sm'
+                      : 'text-[#2B1810]/70 hover:bg-[#2B1810]/5'
+                  }`}
+                >
+                  Hero Branding
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSettingsSubTab('categories')}
+                  className={`px-4 py-2 rounded-xl text-xs font-mono-code font-bold uppercase transition whitespace-nowrap cursor-pointer ${
+                    settingsSubTab === 'categories'
+                      ? 'bg-[#2B1810] text-[#F5EFEB] shadow-sm'
+                      : 'text-[#2B1810]/70 hover:bg-[#2B1810]/5'
+                  }`}
+                >
+                  Category Banners
+                </button>
+              </>
+            ) : (
+              <div className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-mono-code text-amber-900 bg-amber-500/10 rounded-xl border border-amber-500/20 whitespace-nowrap">
+                <Lock className="w-3 h-3 text-amber-700" />
+                <span>Delivery & Branding Setting Tabs (Owner Only)</span>
+              </div>
+            )}
           </div>
 
           {/* 1. Store Open/Closed Status Selector */}
+          {(settingsSubTab === 'all' || settingsSubTab === 'status') && (
           <div className="bg-[#ECE4D8] border border-[#2B1810]/15 rounded-3xl p-6 sm:p-7 shadow-xs space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
@@ -2646,8 +2744,10 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
               </div>
             </div>
           </div>
+          )}
 
           {/* 2. Delivery Management Controls (Dynamic sync across storefront, "The Bag", & checkout) */}
+          {(settingsSubTab === 'all' || settingsSubTab === 'delivery') && (
           <div className="bg-[#ECE4D8] border border-[#2B1810]/15 rounded-3xl p-6 sm:p-7 shadow-xs space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
@@ -2798,8 +2898,10 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
               </div>
             </form>
           </div>
+          )}
 
           {/* 3. Store Operating Hours & Contacts */}
+          {(settingsSubTab === 'all' || settingsSubTab === 'status') && (
           <div className="bg-[#ECE4D8] border border-[#2B1810]/15 rounded-3xl p-6 sm:p-7 shadow-xs space-y-4">
             <div>
               <div className="text-[10px] font-mono-code font-bold tracking-[0.2em] text-[#C46726] uppercase">
@@ -2838,8 +2940,10 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
               </div>
             </div>
           </div>
+          )}
 
           {/* 4. Hero Banner Updates with Local File Upload */}
+          {(settingsSubTab === 'all' || settingsSubTab === 'branding') && (
           <div className="bg-[#ECE4D8] border border-[#2B1810]/15 rounded-3xl p-6 sm:p-7 shadow-xs space-y-5">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
@@ -2914,9 +3018,10 @@ export const StaffDashboard: React.FC<StaffDashboardProps> = ({
               </button>
             </div>
           </div>
+          )}
 
           {/* 5. Category Banners Management in Settings (Owner Access) */}
-          {isOwner && (
+          {isOwner && (settingsSubTab === 'all' || settingsSubTab === 'categories') && (
             <div className="bg-[#ECE4D8] border border-[#2B1810]/15 rounded-3xl p-6 sm:p-7 shadow-xs space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>

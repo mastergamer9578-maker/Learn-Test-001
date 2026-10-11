@@ -131,7 +131,7 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
         const uData = userDocSnap.data();
         isAdmin = Boolean(uData?.isAdmin === true || uData?.role === 'admin' || uData?.role === 'owner');
         isOwner = Boolean(uData?.isOwner === true || uData?.role === 'owner');
-        displayName = uData?.name || uData?.displayName || (isOwner ? 'Store Owner' : 'Store Administrator');
+        displayName = uData?.name || uData?.displayName || (isOwner ? 'Store Owner' : 'Staff / Admin');
 
         // 2. If BOTH isAdmin and isOwner are false (or missing), block, sign out, and show error
         if (!isAdmin && !isOwner) {

@@ -162,7 +162,7 @@ export const ProtectedAuthGuard: React.FC<ProtectedAuthGuardProps> = ({
         const uData = userDocSnap.data();
         isAdmin = Boolean(uData?.isAdmin === true || uData?.role === 'admin' || uData?.role === 'owner');
         isOwner = Boolean(uData?.isOwner === true || uData?.role === 'owner');
-        displayName = uData?.name || uData?.displayName || (isOwner ? 'Store Owner' : 'Store Administrator');
+        displayName = uData?.name || uData?.displayName || (isOwner ? 'Store Owner' : 'Staff / Admin');
 
         if (!isAdmin && !isOwner) {
           await signOut(auth);
